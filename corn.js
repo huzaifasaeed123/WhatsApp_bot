@@ -4,8 +4,10 @@ const readDataByDate=require("./excelReader");
 const moment = require('moment');
 
 const dateFormat = 'DD/MM/YYYY';
-const currentDate = moment().format(dateFormat);
+
+//console.log(currentDate);
 async function cornScheduler(){
+    let currentDate = moment().format(dateFormat);
     return readDataByDate(excelFilePath, currentDate)
     .then(data => {
         if (!data) {

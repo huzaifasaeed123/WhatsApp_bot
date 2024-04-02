@@ -56,54 +56,42 @@ client.on('ready', async () => {
     
     // console.log(name);
 });
-async function forwardByAdminGrp(message,a){
-    let i=0;
-    targetGroupIds.forEach(async (groupId) => {
-        // Here you can use message.forward if available, or resend the content based on message type
-        // This example will resend the message as text
+async function forwardByAdminGrp(message, a) {
+    let i = 0;
+    for (const groupId of targetGroupIds) {
         if (message.hasMedia) {
             const media = await message.downloadMedia();
-            
-            // Prepare the options for sending the message. If there's a caption, include it.
             let options = {};
             if (message.body) {
                 options.caption = message.body;
             }
 
-            
-            
-            // Determine how to send the media based on its type
             switch (message.type) {
                 case 'image':
-                    await client.sendMessage(groupId, media, options);
-                    break;
                 case 'video':
                     await client.sendMessage(groupId, media, options);
                     break;
                 default:
-                    // For other types, send as a document. You might adjust this part as needed.
-                    await client.sendMessage(groupId, media, { sendMediaAsDocument: true ,caption: options.caption });
+                    await client.sendMessage(groupId, media, { sendMediaAsDocument: true, caption: options.caption });
                     break;
             }
         } else {
-            // For text messages, forward them directly.
-            if(a==0){
+            if (a == 0) {
                 await client.sendMessage(groupId, message.body);
-                console.log(i+":Message Send");
-            }
-            else{
+                console.log(i + ": Message Sent");
+            } else {
                 await client.sendMessage(groupId, message);
-                console.log(i+"Message Send");
+                console.log(i + " Message Sent");
             }
-            
         }
         i++;
-        await new Promise(resolve => setTimeout(resolve, 5000));
-    });
-    
+        await new Promise(resolve => setTimeout(resolve, 10000)); // 10-second delay
+    }
 }
+
 async function SaeedMdcatGids(){
     const chats = await client.getChats();
+    targetGroupIds=[];
     chats.forEach(chat => {
         if (chat.isGroup) 
         {
@@ -124,29 +112,36 @@ async function SaeedMdcatGidsView(message){
     // console.log("ALl Chats has been fetch");
     // Filter out groups and log their names and IDs
     messageBody="";
+    index=0;
     chats.forEach(chat => {
         if (chat.isGroup) 
         {
             if(chat.name.substring(0,5)==="SAEED")
             {
-                messageBody+=`\nGroup Name: ${chat.name}, Group ID: ${chat.id._serialized}`
-                targetGroupIds.push(chat.id._serialized);
+                index++;
+                messageBody+=`\n${index}-Group Name: ${chat.name}, Group ID: ${chat.id._serialized}`
+                // targetGroupIds.push(chat.id._serialized);
                 
             }
             //console.log(`Group Name: ${chat.name}, Group ID: ${chat.id._serialized}`);
         }
         
     });
+    
+    console.log(targetGroupIds);
+    console.log(targetGroupIds.length);
     client.sendMessage(message.from,messageBody);
 }
 async function Groupids(message){
     const chats = await client.getChats();
     // Filter out groups and log their names and IDs
     messageBody="";
+    index=0;
     chats.forEach(chat => {
         if (chat.isGroup) 
         {
-            messageBody+=`\nGroup Name: ${chat.name}, Group ID: ${chat.id._serialized}`
+            index++;
+            messageBody+=`\n${index}-Group Name: ${chat.name}, Group ID: ${chat.id._serialized}`
                 // targetGroupIds.push(chat.id._serialized);
                 // name.push(chat.name);
             
@@ -166,19 +161,20 @@ async function executeScheduledCode() {
     forwardByAdminGrp(mess, 1);
 }
 cron.schedule('0 10 * * *',async () => {
-    console.log('Running the scheduled task at 8:43 PM Pakistan Time...');
+    console.log('Running the scheduled task at 10.0 PM Pakistan Time...');
     await executeScheduledCode();
 }, {
     scheduled: true,
     timezone: "Asia/Karachi" // Setting timezone to Pakistan Time
 });
+
 client.on('message',async message => {
     // console.log(message);
     if(message.from==="923471729745@c.us" || message.from==="923487842266@c.us" || message.from=== "120363260003419505@g.us")
     {
         if(message.body===".gids")
         {
-            console.log(message);
+            //console.log(message);
             Groupids(message);
         }
         else if(message.body===".Sgids"){

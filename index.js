@@ -12,13 +12,14 @@ const cron = require('node-cron');
 let targetGroupIds = [];
 
 const client = new Client({
+
     authStrategy: new LocalAuth() // This uses a local authentication strategy to persist login
 });
 
-// client.on('qr', qr => {
-//     // Generate and display the QR code for authentication
-//     qrcode.generate(qr, {small: true});
-// });
+client.on('qr', qr => {
+    // Generate and display the QR code for authentication
+    qrcode.generate(qr, {small: true});
+});
 function makeMessage(data){
     if(data[5]!=null && data[6] != null){
         const formattedExcelDate = moment(new Date(data[1])).format("DD/MM/YYYY");

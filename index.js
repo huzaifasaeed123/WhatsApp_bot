@@ -13,7 +13,10 @@ let targetGroupIds = [];
 
 const client = new Client({
 
-    authStrategy: new LocalAuth() // This uses a local authentication strategy to persist login
+    authStrategy: new LocalAuth(),
+     puppeteer: {
+        args: ['--no-sandbox', '--disable-setuid-sandbox']
+    }// This uses a local authentication strategy to persist login
 });
 
 client.on('qr', qr => {
@@ -170,7 +173,7 @@ cron.schedule('0 10 * * *',async () => {
 });
 
 client.on('message',async message => {
-    // console.log(message);
+    console.log(message);
     if(message.from==="923471729745@c.us" || message.from==="923487842266@c.us" || message.from=== "120363260003419505@g.us")
     {
         if(message.body===".gids")

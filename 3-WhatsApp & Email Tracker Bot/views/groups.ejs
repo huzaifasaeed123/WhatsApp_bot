@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Select Groups to Track</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: Arial, sans-serif;
+      background: #f4f4f4;
+      padding: 20px;
+    }
+    .container {
+      max-width: 800px;
+      margin: 0 auto;
+      background: white;
+      padding: 30px;
+      border-radius: 10px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+    }
+    h1 {
+      color: #333;
+      margin-bottom: 10px;
+    }
+    .subtitle {
+      color: #666;
+      margin-bottom: 30px;
+    }
+    .group-list {
+      max-height: 400px;
+      overflow-y: auto;
+      border: 1px solid #ddd;
+      border-radius: 5px;
+      padding: 15px;
+    }
+    .group-item {
+      padding: 12px;
+      margin-bottom: 10px;
+      background: #f9f9f9;
+      border-radius: 5px;
+      display: flex;
+      align-items: center;
+    }
+    .group-item:hover {
+      background: #f0f0f0;
+    }
+    .group-item input[type="checkbox"] {
+      margin-right: 15px;
+      width: 20px;
+      height: 20px;
+      cursor: pointer;
+    }
+    .group-item label {
+      cursor: pointer;
+      flex: 1;
+      font-size: 16px;
+    }
+    .btn-container {
+      margin-top: 30px;
+      text-align: center;
+    }
+    .btn {
+      background: #25D366;
+      color: white;
+      padding: 12px 40px;
+      border: none;
+      border-radius: 5px;
+      font-size: 16px;
+      cursor: pointer;
+    }
+    .btn:hover {
+      background: #128C7E;
+    }
+    .selected-count {
+      margin-top: 15px;
+      color: #666;
+      font-weight: bold;
+    }
+    .no-groups {
+      text-align: center;
+      padding: 40px;
+      color: #999;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Select Groups to Track</h1>
+    <p class="subtitle">Choose which WhatsApp groups you want to monitor</p>
+    
+    <form action="/track-groups" method="POST">
+      <div class="group-list">
+        <% if (groups.length > 0) { %>
+          <% groups.forEach(group => { %>
+            <div class="group-item">
+              <input 
+                type="checkbox" 
+                name="groupIds" 
+                value="<%= group.id %>" 
+                id="group-<%= group.id %>"
+                <%= trackedGroupIds.includes(group.id) ? 'checked' : '' %>
+                onchange="updateCount()"
+              >
+              <label for="group-<%= group.id %>"><%= group.name %></label>
+            </div>
+          <% }) %>
+        <% } else { %>
+          <div class="no-groups">
+            No groups found. Make sure you're added to some WhatsApp groups.
+          </div>
+        <% } %>
+      </div>
+
+      <div class="selected-count" id="selectedCount">
+        Selected: <%= trackedGroupIds.length %> group(s)
+      </div>
+
+      <div class="btn-container">
+        <button type="submit" class="btn">Start Tracking</button>
+      </div>
+    </form>
+  </div>
+
+  <script>
+    function updateCount() {
+      const checkboxes = document.querySelectorAll('input[name="groupIds"]:checked');
+      document.getElementById('selectedCount').textContent = 
+        `Selected: ${checkboxes.length} group(s)`;
+    }
+  </script>
+</body>
+</html>

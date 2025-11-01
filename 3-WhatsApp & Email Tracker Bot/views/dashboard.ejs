@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dashboard - WhatsApp Bot</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: Arial, sans-serif;
+      background: #f4f4f4;
+    }
+    .header {
+      background: #25D366;
+      color: white;
+      padding: 20px;
+      box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+    }
+    .header h1 {
+      font-size: 24px;
+    }
+    .nav {
+      margin-top: 10px;
+    }
+    .nav a {
+      color: white;
+      text-decoration: none;
+      margin-right: 20px;
+      padding: 8px 15px;
+      background: rgba(255,255,255,0.2);
+      border-radius: 5px;
+    }
+    .nav a:hover {
+      background: rgba(255,255,255,0.3);
+    }
+    .container {
+      max-width: 1200px;
+      margin: 20px auto;
+      padding: 0 20px;
+    }
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 20px;
+      margin-bottom: 30px;
+    }
+    .stat-card {
+      background: white;
+      padding: 20px;
+      border-radius: 8px;
+      box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+    }
+    .stat-card h3 {
+      color: #666;
+      font-size: 14px;
+      margin-bottom: 10px;
+    }
+    .stat-card .number {
+      font-size: 32px;
+      font-weight: bold;
+      color: #25D366;
+    }
+    .messages-container {
+      background: white;
+      padding: 20px;
+      border-radius: 8px;
+      box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+    }
+    .messages-container h2 {
+      margin-bottom: 20px;
+      color: #333;
+    }
+    .message-item {
+      padding: 15px;
+      border-bottom: 1px solid #eee;
+      animation: fadeIn 0.3s;
+    }
+    .message-item:last-child {
+      border-bottom: none;
+    }
+    .message-header {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 8px;
+    }
+    .group-name {
+      font-weight: bold;
+      color: #25D366;
+    }
+    .message-time {
+      color: #999;
+      font-size: 12px;
+    }
+    .sender-number {
+      color: #666;
+      font-size: 14px;
+      margin-bottom: 5px;
+    }
+    .message-content {
+      color: #333;
+      line-height: 1.5;
+    }
+    .no-messages {
+      text-align: center;
+      padding: 40px;
+      color: #999;
+    }
+    .new-message {
+      background: #e8f5e9 !important;
+    }
+    .deleted-message {
+      color: #d32f2f;
+      font-style: italic;
+    }
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(-10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>WhatsApp Bot Dashboard</h1>
+    <div class="nav">
+      <a href="/dashboard">Dashboard</a>
+      <a href="/groups">Manage Groups</a>
+    </div>
+  </div>
+
+  <div class="container">
+    <div class="stats">
+      <div class="stat-card">
+        <h3>TRACKED GROUPS</h3>
+        <div class="number"><%= trackedGroups.length %></div>
+      </div>
+      <div class="stat-card">
+        <h3>TOTAL MESSAGES</h3>
+        <div class="number" id="totalMessages"><%= messages.length %></div>
+      </div>
+    </div>
+
+    <div class="messages-container">
+      <h2>Recent Messages</h2>
+      <div id="messagesList">
+        <% if (messages.length > 0) { %>
+          <% messages.forEach(msg => { %>
+            <div class="message-item" id="msg-<%= msg._id %>">
+              <div class="message-header">
+                <span class="group-name"><%= msg.groupName %></span>
+                <span class="message-time">
+                  <%= new Date(msg.date).toLocaleString() %>
+                </span>
+              </div>
+              <div class="sender-number">From: <%= msg.senderNumber %></div>
+              <div class="message-content <%= msg.isDeleted ? 'deleted-message' : '' %>">
+                <% if (msg.isDeleted) { %>
+                  Message deleted
+                <% } else { %>
+                  <%= msg.messageContent %>
+                <% } %>
+              </div>
+            </div>
+          <% }) %>
+        <% } else { %>
+          <div class="no-messages">
+            No messages yet. Waiting for messages from tracked groups...
+          </div>
+        <% } %>
+      </div>
+    </div>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    const socket = io();
+    
+    // 🟢 When new message arrives
+    socket.on('newMessage', (message) => {
+      const messagesList = document.getElementById('messagesList');
+      const noMessages = messagesList.querySelector('.no-messages');
+      if (noMessages) noMessages.remove();
+
+      const messageItem = document.createElement('div');
+      messageItem.className = 'message-item new-message';
+      messageItem.id = 'msg-' + message._id;
+
+      messageItem.innerHTML = `
+        <div class="message-header">
+          <span class="group-name">${message.groupName}</span>
+          <span class="message-time">${new Date(message.date).toLocaleString()}</span>
+        </div>
+        <div class="sender-number">From: ${message.senderNumber}</div>
+        <div class="message-content">${message.messageContent}</div>
+      `;
+
+      messagesList.insertBefore(messageItem, messagesList.firstChild);
+
+      const totalMessages = document.getElementById('totalMessages');
+      totalMessages.textContent = parseInt(totalMessages.textContent) + 1;
+
+      setTimeout(() => {
+        messageItem.classList.remove('new-message');
+      }, 2000);
+    });
+
+    // 🔴 When a message is deleted
+    socket.on('messageDeleted', (payload) => {
+      const msgDiv = document.getElementById('msg-' + payload._id);
+      if (msgDiv) {
+        const contentDiv = msgDiv.querySelector('.message-content');
+        if (contentDiv) {
+          contentDiv.textContent = 'Message deleted';
+          contentDiv.classList.add('deleted-message');
+        }
+      } else {
+        console.log('Deleted message not found in DOM:', payload);
+      }
+    });
+
+    // 🕒 When messages auto-delete via cron
+    socket.on('messageDeletedBatch', (data) => {
+      console.log(`${data.deletedCount} messages auto-deleted`);
+
+      data.messageIds.forEach(id => {
+        const msgDiv = document.getElementById('msg-' + id);
+        if (msgDiv) {
+          const contentDiv = msgDiv.querySelector('.message-content');
+          if (contentDiv) {
+            contentDiv.textContent = 'Message deleted automatically';
+            contentDiv.classList.add('deleted-message');
+          }
+        }
+      });
+    });
+
+  </script>
+</body>
+</html>

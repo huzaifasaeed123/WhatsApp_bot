@@ -1,5 +1,6 @@
 // services/emailService.js
 const MailListener = require("mail-listener2");
+const Imap = require("imap");
 const { analyzeMessage } = require("./aiProcessor");
 const Message = require("../models/Message");
 
@@ -8,257 +9,219 @@ class EmailService {
     this.mailListener = null;
     this.isConnected = false;
     this.io = null;
+    this.startTime = null; // To track only new emails
+    this.initialCleanupDone = false;
   }
 
-  initialize(io) {
+  async initialize(io) {
     this.io = io;
-    
-    // Configure Mail Listener
+    this.startTime = new Date(); // When our service actually starts
+
+    console.log("🔄 Marking all old unread emails as seen before starting listener...");
+
+    await this.markAllExistingEmailsAsSeen(); // STEP 1 — super important
+
+    console.log("✔ All old unread emails cleaned. Now starting email listener...");
+
+    this.startListener();
+  }
+
+  startListener() {
     this.mailListener = new MailListener({
       username: process.env.EMAIL_USER,
       password: process.env.EMAIL_PASS,
-      host: process.env.EMAIL_HOST || "imap.gmail.com",
-      port: parseInt(process.env.EMAIL_PORT) || 993,
+      host: "imap.gmail.com",
+      port: 993,
       tls: true,
-      tlsOptions: {
-        rejectUnauthorized: false
-      },
+      tlsOptions: { rejectUnauthorized: false },
       mailbox: "INBOX",
-      markSeen: true,
-      fetchUnreadOnStart: true,
+      markSeen: true,                    // Mark new emails as seen
+      fetchUnreadOnStart: false,         // DO NOT fetch unread emails at startup
       attachments: false,
-      attachmentOptions: { directory: "attachments/" }
     });
 
     this.setupEventHandlers();
-    this.start();
+    this.mailListener.start();
   }
 
+  //------------------------------------------------------------
+  // STEP 1 — Mark all old unread emails as seen before starting
+  //------------------------------------------------------------
+  markAllExistingEmailsAsSeen() {
+    return new Promise((resolve, reject) => {
+      const imap = new Imap({
+        user: process.env.EMAIL_USER,
+        password: process.env.EMAIL_PASS,
+        host: "imap.gmail.com",
+        port: 993,
+        tls: true,
+        tlsOptions: { rejectUnauthorized: false } // ✅ REQUIRED FIX
+
+      });
+
+      imap.once("ready", function () {
+        imap.openBox("INBOX", false, function (err, box) {
+          if (err) return reject(err);
+
+          // Search for UNREAD emails
+          imap.search(["UNSEEN"], function (err, results) {
+            if (err) return reject(err);
+
+            if (results.length === 0) {
+              console.log("👌 No unread emails found. Clean start.");
+              imap.end();
+              return resolve();
+            }
+
+            // Mark all unread emails as SEEN
+            imap.addFlags(results, "\\Seen", function (err) {
+              if (err) return reject(err);
+
+              console.log(`✔ Marked ${results.length} old unread emails as seen.`);
+              imap.end();
+              return resolve();
+            });
+          });
+        });
+      });
+
+      imap.once("error", reject);
+      imap.connect();
+    });
+  }
+
+  //------------------------------------------------------------
+  // STEP 2 — Setup IMAP event handlers
+  //------------------------------------------------------------
   setupEventHandlers() {
-    // Connection events
     this.mailListener.on("server:connected", () => {
-      console.log("✅ Connected to IMAP server");
+      console.log("📡 IMAP server connected.");
       this.isConnected = true;
-      if (this.io) {
-        this.io.emit("email:connected", { message: "Email server connected successfully!" });
-      }
     });
 
     this.mailListener.on("server:disconnected", () => {
-      console.log("⚠️ IMAP server disconnected. Reconnecting...");
+      console.log("⚠️ IMAP disconnected — reconnecting in 5s");
       this.isConnected = false;
-      if (this.io) {
-        this.io.emit("email:disconnected", { message: "Email server disconnected" });
-      }
-      // Auto-reconnect after delay
-      setTimeout(() => {
-        this.start();
-      }, 5000);
+      setTimeout(() => this.startListener(), 5000);
     });
 
     this.mailListener.on("error", (err) => {
-      console.error("❌ Mail listener error:", err);
-      this.isConnected = false;
-      if (this.io) {
-        this.io.emit("email:error", { error: err.message });
-      }
+      console.error("IMAP Error:", err);
     });
 
-    // New mail handler
+    //------------------------------------------------------------
+    // The MAIN handler for new incoming email
+    //------------------------------------------------------------
     this.mailListener.on("mail", async (mail) => {
       try {
+        const received = mail.receivedDate
+          ? new Date(mail.receivedDate)
+          : new Date();
+
+        // STEP 2: Ignore all emails that arrived BEFORE service started
+        if (received < this.startTime) {
+          console.log(`⏭️ Old email ignored (received: ${received.toISOString()})`);
+          return;
+        }
+
         await this.processIncomingEmail(mail);
-      } catch (error) {
-        console.error("Error processing email:", error);
+
+      } catch (err) {
+        console.error("Error in email processing:", err);
       }
     });
   }
 
+  //------------------------------------------------------------
+  // MAIN EMAIL PROCESSOR
+  //------------------------------------------------------------
   async processIncomingEmail(mail) {
-    try {
-      console.log("📩 New email received from:", mail.from[0].address);
-      console.log("Subject:", mail.subject);
-      
-      // Extract email content (prefer text, fallback to HTML)
-      let emailBody = '';
-      if (mail.text) {
-        emailBody = mail.text;
-      } else if (mail.html) {
-        // Simple HTML to text conversion (you might want to use a proper library)
-        emailBody = mail.html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
-      }
+    console.log("📩 NEW EMAIL ARRIVED!");
 
-      if (!emailBody) {
-        console.log("⚠️ Email has no readable content, skipping...");
-        return;
-      }
+    let emailBody = mail.text || mail.html?.replace(/<[^>]*>/g, " ") || "";
 
-      // Extract sender information
-      const senderName = mail.from[0].name || mail.from[0].address.split('@')[0];
-      const senderEmail = mail.from[0].address;
-      
-      // Get company from email domain (optional)
-      const company = this.extractCompanyFromEmail(senderEmail);
-
-      // Step 1: Call AI processor to extract structured logistics info
-      console.log("🧠 Processing email with AI...");
-      const aiExtracted = await analyzeMessage(emailBody);
-      
-      // Map AI output to database structure
-      const mappedAiData = aiExtracted.map(item => ({
-        loading_country: item.LoadingCountry,
-        loading_city: item.LoadingCity,
-        loading_postcode: item.LoadingPostcode,
-        loading_lat: null,
-        loading_lng: null,
-        
-        delivery_country: item.DeliveryCountry,
-        delivery_city: item.DeliveryCity,
-        delivery_postcode: item.DeliveryPostcode,
-        delivery_lat: null,
-        delivery_lng: null,
-        
-        price: item.Price ? this.parsePrice(item.Price) : null,
-        comments: item.Comments
-      }));
-
-      // Step 2: Create message document
-      const emailMessage = new Message({
-        // Source type
-        type: "email",
-        
-        // Common fields
-        senderName,
-        company,
-        originalContent: emailBody,
-        
-        // Email specific fields
-        emailId: mail.messageId,
-        senderEmail,
-        
-        // WhatsApp specific fields (null for emails)
-        messageId: null,
-        groupId: null,
-        groupName: null,
-        senderNumber: null,
-        
-        // AI extracted data
-        aiExtracted: mappedAiData,
-        
-        // Set expiration date (24 hours from now)
-        expirationDate: new Date(Date.now() + 24 * 60 * 60 * 1000),
-        
-        // System fields
-        status: "new",
-        isDeleted: false,
-        created_at: new Date(),
-        updated_at: new Date()
-      });
-
-      const savedMessage = await emailMessage.save();
-      
-      // Step 3: Emit to frontend for real-time updates
-      if (this.io) {
-        this.io.emit('newMessage', {
-          _id: savedMessage._id,
-          type: savedMessage.type,
-          emailId: mail.messageId,
-          senderName,
-          senderEmail,
-          company,
-          originalContent: emailBody,
-          subject: mail.subject,
-          aiExtracted: mappedAiData,
-          created_at: savedMessage.created_at,
-          status: savedMessage.status
-        });
-      }
-
-      console.log(`✅ Email processed and saved with ${mappedAiData.length} AI-extracted shipments`);
-      
-      return savedMessage;
-
-    } catch (error) {
-      console.error("❌ Failed to process incoming email:", error);
-      throw error;
+    if (!emailBody.trim()) {
+      console.log("⚠️ Skipping email with no usable body");
+      return;
     }
+
+    const senderEmail = mail.from[0].address;
+    const senderName = mail.from[0].name || senderEmail.split("@")[0];
+    const company = this.extractCompanyFromEmail(senderEmail);
+
+    console.log("🧠 Processing via AI...");
+    const aiExtracted = await analyzeMessage(emailBody);
+
+    if (aiExtracted.length === 0) {
+      console.log("⚠️ AI found no shipments. Email ignored.");
+      return;
+    }
+
+    const mappedAiData = aiExtracted.map(item => ({
+      loading_country: item.LoadingCountry,
+      loading_city: item.LoadingCity,
+      loading_postcode: item.LoadingPostcode,
+      loading_lat: null,
+      loading_lng: null,
+
+      delivery_country: item.DeliveryCountry,
+      delivery_city: item.DeliveryCity,
+      delivery_postcode: item.DeliveryPostcode,
+      delivery_lat: null,
+      delivery_lng: null,
+
+      price: this.parsePrice(item.Price),
+      comments: item.Comments
+    }));
+
+    const saved = await new Message({
+      type: "email",
+      senderName,
+      senderEmail,
+      company,
+      originalContent: emailBody,
+      emailId: mail.messageId,
+      aiExtracted: mappedAiData,
+      created_at: new Date(),
+      updated_at: new Date(),
+      expirationDate: new Date(Date.now() + 24 * 60 * 60 * 1000)
+    }).save();
+
+    if (this.io) {
+      this.io.emit("newMessage", saved);
+    }
+
+    console.log(`✅ Email saved with ${mappedAiData.length} shipments.`);
   }
 
-  // Helper method to extract company name from email domain
+  //------------------------------------------------------------
+  // UTILITIES
+  //------------------------------------------------------------
   extractCompanyFromEmail(email) {
     try {
-      const domain = email.split('@')[1];
+      const domain = email.split("@")[1];
       if (!domain) return null;
-      
-      // Remove common email providers and extract company name
-      const commonProviders = ['gmail.com', 'yahoo.com', 'hotmail.com', 'outlook.com', 'aol.com'];
-      if (commonProviders.includes(domain.toLowerCase())) {
-        return null;
-      }
-      
-      // Extract company name from domain
-      const companyPart = domain.split('.')[0];
-      return companyPart.charAt(0).toUpperCase() + companyPart.slice(1);
-    } catch (error) {
+
+      const common = ["gmail.com", "yahoo.com", "hotmail.com", "outlook.com"];
+      if (common.includes(domain)) return null;
+
+      return domain.split(".")[0];
+    } catch {
       return null;
     }
   }
 
-  // Helper method to parse price from string
-  parsePrice(priceString) {
-    try {
-      if (!priceString) return null;
-      // Remove currency symbols and extract numbers
-      const numericValue = priceString.replace(/[^\d.,]/g, '').replace(',', '.');
-      const parsed = parseFloat(numericValue);
-      return isNaN(parsed) ? null : parsed;
-    } catch (error) {
-      return null;
-    }
-  }
-
-  start() {
-    if (this.mailListener) {
-      try {
-        this.mailListener.start();
-      } catch (error) {
-        console.error("Error starting mail listener:", error);
-      }
-    }
-  }
-
-  stop() {
-    if (this.mailListener) {
-      try {
-        this.mailListener.stop();
-        this.isConnected = false;
-      } catch (error) {
-        console.error("Error stopping mail listener:", error);
-      }
-    }
+  parsePrice(string) {
+    if (!string) return null;
+    const num = parseFloat(string.replace(/[^\d.,]/g, "").replace(",", "."));
+    return isNaN(num) ? null : num;
   }
 
   getStatus() {
     return {
       isConnected: this.isConnected,
-      service: 'email'
+      startTime: this.startTime,
     };
-  }
-
-  // Method to manually check for new emails (useful for testing)
-  async checkForNewEmails() {
-    if (this.isConnected && this.mailListener) {
-      try {
-        // This will trigger the mail listener to check for new emails
-        console.log("🔄 Manually checking for new emails...");
-        // The mail-listener2 automatically fetches unread emails
-        return true;
-      } catch (error) {
-        console.error("Error checking for emails:", error);
-        return false;
-      }
-    }
-    return false;
   }
 }
 

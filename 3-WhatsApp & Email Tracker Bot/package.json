@@ -29,6 +29,7 @@
     "mail-listener2": "^0.3.1",
     "mongoose": "^8.0.0",
     "node-cron": "^4.2.1",
+    "nodemailer": "^7.0.10",
     "openai": "^6.7.0",
     "qrcode": "^1.5.3",
     "socket.io": "^4.6.1",

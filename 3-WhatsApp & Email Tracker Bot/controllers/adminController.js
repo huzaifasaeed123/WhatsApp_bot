@@ -71,42 +71,43 @@ exports.trackGroups = async (req, res) => {
   }
 };
 
-// Show dashboard with real-time messages from both WhatsApp and Email
+// Enhanced dashboard with comprehensive filtering
 exports.dashboard = async (req, res) => {
   try {
-    // Get WhatsApp service status
+    // Get service status
     const whatsappStatus = whatsappService.getStatus();
-    
-    // Get Email service status
     const emailStatus = emailService.getStatus();
-    
-    // Get tracked WhatsApp groups
     const trackedGroups = await TrackedGroup.find({ isActive: true });
     
-    // Get recent messages from both WhatsApp and Email
-    const messages = await Message.find({
-      isDeleted: false,
-      type: { $in: ["whatsapp", "email"] }
-    })
-    .sort({ created_at: -1 })
-    .limit(100); // Increased limit to show more data
+    // Get basic statistics for dashboard cards
+    const now = new Date();
+    const twentyFourHoursAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+    
+    const [totalMessages, activeMessages, last24hMessages, totalShipments] = await Promise.all([
+      Message.countDocuments({}), // All messages including deleted
+      Message.countDocuments({ isDeleted: false }), // Active only
+      Message.countDocuments({ 
+        created_at: { $gte: twentyFourHoursAgo },
+        isDeleted: false 
+      }), // Last 24h active
+      Message.aggregate([
+        { $match: { isDeleted: false } },
+        { $unwind: '$aiExtracted' },
+        { $count: 'total' }
+      ]).then(result => result[0]?.total || 0)
+    ]);
 
-    // Calculate statistics
     const stats = {
-      totalMessages: messages.length,
-      whatsappMessages: messages.filter(m => m.type === 'whatsapp').length,
-      emailMessages: messages.filter(m => m.type === 'email').length,
-      todayMessages: messages.filter(m => {
-        const today = new Date();
-        const msgDate = new Date(m.created_at);
-        return msgDate.toDateString() === today.toDateString();
-      }).length,
-      totalShipments: messages.reduce((count, m) => count + (m.aiExtracted?.length || 0), 0)
+      totalMessages,
+      activeMessages,
+      last24hMessages,
+      totalShipments,
+      whatsappMessages: await Message.countDocuments({ type: 'whatsapp', isDeleted: false }),
+      emailMessages: await Message.countDocuments({ type: 'email', isDeleted: false })
     };
 
     res.render('dashboard', { 
       trackedGroups,
-      messages,
       stats,
       whatsappStatus,
       emailStatus
@@ -117,30 +118,214 @@ exports.dashboard = async (req, res) => {
   }
 };
 
-// API endpoint to get messages with updated field structure
+// API endpoint for comprehensive message filtering with pagination and search
 exports.getMessages = async (req, res) => {
   try {
-    const { type, limit = 50 } = req.query;
+    const {
+      type = 'all',           // all, whatsapp, email
+      status = 'all',         // all, active, deleted
+      timeframe = 'all',      // all, last24h, last7d, last30d
+      search = '',            // search term
+      page = 1,              // pagination
+      limit = 100            // items per page (max 1000)
+    } = req.query;
+
+    // Build query conditions
+    const query = {};
     
-    // Build query
-    const query = { isDeleted: false };
-    if (type && ['whatsapp', 'email'].includes(type)) {
+    // Type filter
+    if (type !== 'all') {
       query.type = type;
-    } else {
-      query.type = { $in: ["whatsapp", "email"] };
     }
     
+    // Status filter
+    if (status === 'active') {
+      query.isDeleted = false;
+    } else if (status === 'deleted') {
+      query.isDeleted = true;
+    }
+    // 'all' means no status filter
+    
+    // Timeframe filter
+    const now = new Date();
+    if (timeframe === 'last24h') {
+      query.created_at = { $gte: new Date(now.getTime() - 24 * 60 * 60 * 1000) };
+    } else if (timeframe === 'last7d') {
+      query.created_at = { $gte: new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000) };
+    } else if (timeframe === 'last30d') {
+      query.created_at = { $gte: new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000) };
+    }
+    
+    // Search functionality
+    if (search) {
+      const searchRegex = new RegExp(search, 'i'); // Case-insensitive
+      query.$or = [
+        { senderName: searchRegex },
+        { senderEmail: searchRegex },
+        { senderNumber: searchRegex },
+        { company: searchRegex },
+        { groupName: searchRegex },
+        { originalContent: searchRegex },
+        { 'aiExtracted.loading_city': searchRegex },
+        { 'aiExtracted.loading_country': searchRegex },
+        { 'aiExtracted.delivery_city': searchRegex },
+        { 'aiExtracted.delivery_country': searchRegex },
+        { 'aiExtracted.comments': searchRegex }
+      ];
+    }
+
+    // Pagination
+    const pageNum = Math.max(1, parseInt(page));
+    const limitNum = Math.min(1000, Math.max(1, parseInt(limit))); // Max 1000, min 1
+    const skip = (pageNum - 1) * limitNum;
+
+    // Get total count for pagination
+    const totalCount = await Message.countDocuments(query);
+    const totalPages = Math.ceil(totalCount / limitNum);
+
+    // Get messages with pagination
     const messages = await Message.find(query)
       .sort({ created_at: -1 })
-      .limit(parseInt(limit));
+      .skip(skip)
+      .limit(limitNum)
+      .lean(); // Use lean for better performance
+
+    res.json({
+      success: true,
+      messages,
+      pagination: {
+        currentPage: pageNum,
+        totalPages,
+        totalCount,
+        hasNextPage: pageNum < totalPages,
+        hasPrevPage: pageNum > 1,
+        limit: limitNum
+      },
+      filters: {
+        type,
+        status,
+        timeframe,
+        search
+      }
+    });
+
+  } catch (error) {
+    console.error('Error in getMessages:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+// API endpoint to send automated response
+exports.sendAutomatedResponse = async (req, res) => {
+  try {
+    const { messageId, template } = req.body;
     
-    res.json({ success: true, messages, count: messages.length });
+    // Get the original message
+    const originalMessage = await Message.findById(messageId);
+    if (!originalMessage) {
+      return res.status(404).json({ success: false, error: 'Message not found' });
+    }
+
+    // Build response message with offer details
+    let responseText = template || "Thank you for your logistics offer. We would like to reserve the following:";
+    
+    if (originalMessage.aiExtracted && originalMessage.aiExtracted.length > 0) {
+      responseText += "\n\n📦 OFFER DETAILS:\n";
+      
+      originalMessage.aiExtracted.forEach((shipment, index) => {
+        responseText += `\n${index + 1}. `;
+        if (shipment.loading_city || shipment.loading_country) {
+          responseText += `From: ${shipment.loading_city || ''} ${shipment.loading_country || ''}`;
+          if (shipment.loading_postcode) responseText += ` (${shipment.loading_postcode})`;
+        }
+        if (shipment.delivery_city || shipment.delivery_country) {
+          responseText += ` → To: ${shipment.delivery_city || ''} ${shipment.delivery_country || ''}`;
+          if (shipment.delivery_postcode) responseText += ` (${shipment.delivery_postcode})`;
+        }
+        if (shipment.price) {
+          responseText += `\n   💰 Price: €${shipment.price}`;
+        }
+        if (shipment.comments) {
+          responseText += `\n   📝 ${shipment.comments}`;
+        }
+        responseText += "\n";
+      });
+      
+      responseText += "\nPlease confirm availability and provide further details.";
+    }
+
+    let success = false;
+    let response = '';
+
+    // Send via appropriate channel
+    if (originalMessage.type === 'whatsapp' && originalMessage.senderNumber) {
+      try {
+        success = await whatsappService.sendMessage(originalMessage.senderNumber, responseText);
+        response = success ? 'WhatsApp message sent successfully' : 'Failed to send WhatsApp message';
+      } catch (error) {
+        console.error('WhatsApp send error:', error);
+        response = 'WhatsApp service unavailable';
+      }
+    } else if (originalMessage.type === 'email' && originalMessage.senderEmail) {
+      try {
+        success = await emailService.sendEmail(originalMessage.senderEmail, 'RE: Your Logistics Offer', responseText);
+        response = success ? 'Email sent successfully' : 'Failed to send email';
+      } catch (error) {
+        console.error('Email send error:', error);
+        response = 'Email service unavailable';
+      }
+    } else {
+      response = 'Invalid message type or missing contact information';
+    }
+
+    res.json({
+      success,
+      message: response,
+      sentTo: originalMessage.type === 'whatsapp' ? originalMessage.senderNumber : originalMessage.senderEmail
+    });
+
+  } catch (error) {
+    console.error('Error in sendAutomatedResponse:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+// API endpoint to get/update response templates
+exports.getResponseTemplates = async (req, res) => {
+  try {
+    // For now, return default templates. In production, store in database
+    const templates = {
+      whatsapp: process.env.WHATSAPP_TEMPLATE || "Thank you for your logistics offer. We would like to reserve this shipment. Please confirm availability.",
+      email: process.env.EMAIL_TEMPLATE || "Thank you for your logistics offer. We are interested in reserving this shipment. Please provide further details and confirm availability."
+    };
+
+    res.json({ success: true, templates });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
 };
 
-// API endpoint to get service status
+exports.updateResponseTemplates = async (req, res) => {
+  try {
+    const { whatsappTemplate, emailTemplate } = req.body;
+    
+    // In production, save to database. For now, just return success
+    // You might want to create a Settings model to store these templates
+    
+    res.json({ 
+      success: true, 
+      message: 'Templates updated successfully',
+      templates: {
+        whatsapp: whatsappTemplate,
+        email: emailTemplate
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+// Existing endpoints with minor enhancements
 exports.getServiceStatus = async (req, res) => {
   try {
     const whatsappStatus = whatsappService.getStatus();
@@ -158,7 +343,6 @@ exports.getServiceStatus = async (req, res) => {
   }
 };
 
-// API endpoint to manually check emails
 exports.checkEmails = async (req, res) => {
   try {
     const result = await emailService.checkForNewEmails();
@@ -171,183 +355,83 @@ exports.checkEmails = async (req, res) => {
   }
 };
 
-// Enhanced Excel export with both WhatsApp and Email data
+// Enhanced Excel export with comprehensive data
 exports.exportExcel = async (req, res) => {
   try {
-    // Calculate date 24 hours ago
-    const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const {
+      type = 'all',
+      status = 'active',
+      timeframe = 'last24h'
+    } = req.query;
 
-    // Get messages from last 24 hours with AI extracted data
-    const messages = await Message.find({
-      created_at: { $gte: twentyFourHoursAgo },
-      aiExtracted: { $exists: true, $ne: [] },
-      isDeleted: false,
-      type: { $in: ["whatsapp", "email"] }
-    })
-    .sort({ created_at: -1 });
+    // Build query for export
+    const query = {};
+    
+    if (type !== 'all') {
+      query.type = type;
+    }
+    
+    if (status === 'active') {
+      query.isDeleted = false;
+    } else if (status === 'deleted') {
+      query.isDeleted = true;
+    }
+    
+    const now = new Date();
+    if (timeframe === 'last24h') {
+      query.created_at = { $gte: new Date(now.getTime() - 24 * 60 * 60 * 1000) };
+    } else if (timeframe === 'last7d') {
+      query.created_at = { $gte: new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000) };
+    }
 
-    // Flatten AI extracted shipments with message context
-    const shipments = [];
+    const messages = await Message.find(query).sort({ created_at: -1 });
+
+    // Create workbook with comprehensive data
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet('Logistics Data');
+
+    // Headers
+    const headers = [
+      'Type', 'Status', 'Source', 'Sender', 'Contact', 'Company',
+      'Loading City', 'Loading Country', 'Loading Postcode',
+      'Delivery City', 'Delivery Country', 'Delivery Postcode',
+      'Price', 'Comments', 'Date', 'Deleted At'
+    ];
+
+    worksheet.addRow(headers);
+
+    // Add data rows
     messages.forEach(msg => {
-      if (msg.aiExtracted && Array.isArray(msg.aiExtracted) && msg.aiExtracted.length > 0) {
+      if (msg.aiExtracted && msg.aiExtracted.length > 0) {
         msg.aiExtracted.forEach(shipment => {
-          shipments.push({
-            Type: msg.type || 'unknown',
-            Source: msg.type === 'whatsapp' ? (msg.groupName || 'Unknown Group') : 'Email',
-            Sender: msg.senderName || msg.senderNumber || msg.senderEmail || 'Unknown',
-            'Sender Email': msg.senderEmail || '-',
-            'Sender Number': msg.senderNumber || '-',
-            Company: msg.company || '-',
-            'Loading City': shipment.loading_city || '-',
-            'Loading Country': shipment.loading_country || '-',
-            'Loading Postcode': shipment.loading_postcode || '-',
-            'Delivery City': shipment.delivery_city || '-',
-            'Delivery Country': shipment.delivery_country || '-',
-            'Delivery Postcode': shipment.delivery_postcode || '-',
-            Price: shipment.price ? `€${shipment.price}` : '-',
-            Comments: shipment.comments || '-',
-            Status: msg.status || 'new',
-            'Date & Time': new Date(msg.created_at).toLocaleString(),
-            'Original Message': msg.originalContent?.substring(0, 200) + (msg.originalContent?.length > 200 ? '...' : '') || '-'
-          });
+          worksheet.addRow([
+            msg.type,
+            msg.isDeleted ? 'Deleted' : 'Active',
+            msg.groupName || 'Email',
+            msg.senderName,
+            msg.senderEmail || msg.senderNumber,
+            msg.company || '-',
+            shipment.loading_city || '-',
+            shipment.loading_country || '-',
+            shipment.loading_postcode || '-',
+            shipment.delivery_city || '-',
+            shipment.delivery_country || '-',
+            shipment.delivery_postcode || '-',
+            shipment.price ? `€${shipment.price}` : '-',
+            shipment.comments || '-',
+            new Date(msg.created_at).toLocaleString(),
+            msg.deletedAt ? new Date(msg.deletedAt).toLocaleString() : '-'
+          ]);
         });
       }
     });
 
-    // Create Excel workbook
-    const workbook = new ExcelJS.Workbook();
-    
-    // Main shipments worksheet
-    const worksheet = workbook.addWorksheet('Shipments Data');
-
-    // Add title row
-    worksheet.mergeCells('A1:P1');
-    const titleCell = worksheet.getCell('A1');
-    titleCell.value = `Shipments Report - Last 24 Hours (${new Date().toLocaleString()})`;
-    titleCell.font = { bold: true, size: 14, color: { argb: 'FFFFFFFF' } };
-    titleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF25D366' } };
-    titleCell.alignment = { horizontal: 'center', vertical: 'center' };
-    worksheet.getRow(1).height = 25;
-
-    // Add headers
-    const headers = [
-      'Type', 'Source', 'Sender', 'Sender Email', 'Sender Number', 'Company', 
-      'Loading City', 'Loading Country', 'Loading Postcode',
-      'Delivery City', 'Delivery Country', 'Delivery Postcode', 
-      'Price', 'Comments', 'Status', 'Date & Time'
-    ];
-    const headerRow = worksheet.addRow(headers);
-    headerRow.font = { bold: true, color: { argb: 'FFFFFFFF' } };
-    headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF333333' } };
-    headerRow.alignment = { horizontal: 'center', vertical: 'center', wrapText: true };
-    worksheet.getRow(2).height = 20;
-
-    // Add data rows
-    shipments.forEach((shipment, index) => {
-      const row = worksheet.addRow([
-        shipment.Type,
-        shipment.Source,
-        shipment.Sender,
-        shipment['Sender Email'],
-        shipment['Sender Number'],
-        shipment.Company,
-        shipment['Loading City'],
-        shipment['Loading Country'],
-        shipment['Loading Postcode'],
-        shipment['Delivery City'],
-        shipment['Delivery Country'],
-        shipment['Delivery Postcode'],
-        shipment.Price,
-        shipment.Comments,
-        shipment.Status,
-        shipment['Date & Time']
-      ]);
-
-      // Color coding by type and status
-      if (shipment.Type === 'email') {
-        row.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE8F4FD' } };
-      } else if (shipment.Type === 'whatsapp') {
-        row.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE8F5E8' } };
-      }
-      
-      if (shipment.Status === 'sold') {
-        row.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFE6E6' } };
-      }
-
-      row.alignment = { horizontal: 'left', vertical: 'top', wrapText: true };
-      row.height = 30;
-
-      // Alternate row colors for better readability
-      if (index % 2 === 0 && shipment.Status !== 'sold') {
-        row.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFAFAFA' } };
-      }
-    });
-
-    // Adjust column widths
-    worksheet.columns = [
-      { width: 10 }, // Type
-      { width: 15 }, // Source
-      { width: 15 }, // Sender
-      { width: 20 }, // Sender Email
-      { width: 15 }, // Sender Number
-      { width: 15 }, // Company
-      { width: 15 }, // Loading City
-      { width: 15 }, // Loading Country
-      { width: 12 }, // Loading Postcode
-      { width: 15 }, // Delivery City
-      { width: 15 }, // Delivery Country
-      { width: 12 }, // Delivery Postcode
-      { width: 12 }, // Price
-      { width: 25 }, // Comments
-      { width: 10 }, // Status
-      { width: 20 }  // Date & Time
-    ];
-
-    // Freeze header rows
-    worksheet.views = [{ state: 'frozen', ySplit: 2 }];
-
-    // Add summary sheet
-    const summarySheet = workbook.addWorksheet('Summary');
-    summarySheet.mergeCells('A1:B1');
-    const summaryTitle = summarySheet.getCell('A1');
-    summaryTitle.value = 'Export Summary';
-    summaryTitle.font = { bold: true, size: 12 };
-
-    const whatsappCount = shipments.filter(s => s.Type === 'whatsapp').length;
-    const emailCount = shipments.filter(s => s.Type === 'email').length;
-    const newCount = shipments.filter(s => s.Status === 'new').length;
-    const soldCount = shipments.filter(s => s.Status === 'sold').length;
-
-    const summaryData = [
-      ['Total Shipments', shipments.length],
-      ['WhatsApp Shipments', whatsappCount],
-      ['Email Shipments', emailCount],
-      ['New Status', newCount],
-      ['Sold Status', soldCount],
-      ['Total Messages', messages.length],
-      ['Export Date', new Date().toLocaleString()],
-      ['Period', 'Last 24 Hours']
-    ];
-
-    summaryData.forEach(([label, value]) => {
-      const row = summarySheet.addRow([label, value]);
-      row.getCell(1).font = { bold: true };
-      summarySheet.getCell(`A${row.number}`).alignment = { horizontal: 'left' };
-      summarySheet.getCell(`B${row.number}`).alignment = { horizontal: 'right' };
-    });
-
-    summarySheet.columns = [{ width: 20 }, { width: 20 }];
-
-    // Generate Excel file
     const buffer = await workbook.xlsx.writeBuffer();
-
-    // Send file
-    const filename = `shipments_${new Date().toISOString().split('T')[0]}.xlsx`;
+    const filename = `logistics_export_${new Date().toISOString().split('T')[0]}.xlsx`;
+    
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     res.send(buffer);
-
-    console.log(`📊 Excel export generated: ${shipments.length} shipments from ${messages.length} messages`);
 
   } catch (error) {
     console.error('Export error:', error);

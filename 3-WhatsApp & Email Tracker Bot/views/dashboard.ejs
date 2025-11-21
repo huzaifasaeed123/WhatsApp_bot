@@ -3,674 +3,1110 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Dashboard - WhatsApp & Email Tracker Bot</title>
+  <title>Enhanced Dashboard - WhatsApp & Email Tracker Bot</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
-      font-family: Arial, sans-serif;
-      background: #f4f4f4;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background: #f8fafc;
+      color: #334155;
     }
+    
     .header {
       background: linear-gradient(135deg, #25D366 0%, #1976D2 100%);
       color: white;
       padding: 20px;
-      box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+      box-shadow: 0 4px 20px rgba(0,0,0,0.1);
     }
+    
     .header h1 {
       font-size: 24px;
       margin-bottom: 5px;
+      font-weight: 600;
     }
+    
     .header .subtitle {
       font-size: 14px;
       opacity: 0.9;
     }
+    
     .nav {
-      margin-top: 10px;
+      margin-top: 15px;
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
     }
+    
     .nav a {
       color: white;
       text-decoration: none;
-      margin-right: 20px;
-      padding: 8px 15px;
+      padding: 8px 16px;
       background: rgba(255,255,255,0.2);
-      border-radius: 5px;
-      transition: background 0.3s;
+      border-radius: 6px;
+      transition: all 0.3s;
+      font-size: 14px;
     }
+    
     .nav a:hover {
       background: rgba(255,255,255,0.3);
+      transform: translateY(-1px);
     }
+    
     .container {
       max-width: 1400px;
       margin: 20px auto;
       padding: 0 20px;
     }
+    
+    /* Service Status Cards */
     .service-status {
       display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 15px;
-      margin-bottom: 20px;
+      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+      gap: 20px;
+      margin-bottom: 30px;
     }
+    
     .status-card {
       background: white;
-      padding: 15px 20px;
-      border-radius: 8px;
-      box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+      padding: 20px;
+      border-radius: 12px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.08);
+      border-left: 4px solid;
+      transition: transform 0.2s;
+    }
+    
+    .status-card:hover {
+      transform: translateY(-2px);
+    }
+    
+    .status-card.whatsapp { border-color: #25D366; }
+    .status-card.email { border-color: #1976D2; }
+    
+    .status-header {
       display: flex;
       align-items: center;
-      gap: 15px;
+      justify-content: space-between;
+      margin-bottom: 10px;
     }
-    .status-card.whatsapp {
-      border-left: 4px solid #25D366;
-    }
-    .status-card.email {
-      border-left: 4px solid #1976D2;
-    }
-    .status-icon {
-      font-size: 24px;
-    }
-    .status-info h3 {
-      margin: 0;
+    
+    .status-title {
+      font-weight: 600;
       font-size: 16px;
-      color: #333;
     }
-    .status-info p {
-      margin: 5px 0 0 0;
-      font-size: 14px;
-      color: #666;
-    }
+    
     .status-badge {
-      padding: 4px 8px;
-      border-radius: 12px;
+      padding: 4px 12px;
+      border-radius: 20px;
       font-size: 12px;
-      font-weight: bold;
-      margin-left: auto;
+      font-weight: 600;
     }
-    .status-connected {
-      background: #4CAF50;
-      color: white;
-    }
-    .status-disconnected {
-      background: #f44336;
-      color: white;
-    }
-    .status-disabled {
-      background: #9E9E9E;
-      color: white;
-    }
+    
+    .status-connected { background: #dcfce7; color: #166534; }
+    .status-disconnected { background: #fecaca; color: #991b1b; }
+    
+    /* Statistics Cards */
     .stats {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
       gap: 20px;
       margin-bottom: 30px;
     }
+    
     .stat-card {
       background: white;
       padding: 20px;
-      border-radius: 8px;
-      box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+      border-radius: 12px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.08);
+      text-align: center;
+      transition: transform 0.2s;
     }
-    .stat-card h3 {
-      color: #666;
-      font-size: 14px;
-      margin-bottom: 10px;
-      text-transform: uppercase;
+    
+    .stat-card:hover {
+      transform: translateY(-2px);
     }
-    .stat-card .number {
+    
+    .stat-number {
       font-size: 32px;
-      font-weight: bold;
-      color: #25D366;
+      font-weight: 700;
+      margin-bottom: 8px;
+      background: linear-gradient(135deg, #25D366, #1976D2);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
     }
-    .stat-card.email-stat .number {
-      color: #1976D2;
+    
+    .stat-label {
+      font-size: 14px;
+      color: #64748b;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
     }
-    .table-container {
+    
+    /* Main Content Area */
+    .main-content {
       background: white;
-      padding: 20px;
-      border-radius: 8px;
-      box-shadow: 0 2px 5px rgba(0,0,0,0.1);
-      margin-bottom: 30px;
+      border-radius: 12px;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+      overflow: hidden;
     }
-    .table-header {
+    
+    /* Toolbar */
+    .toolbar {
+      padding: 25px;
+      border-bottom: 1px solid #e2e8f0;
+      background: #fafbfc;
+    }
+    
+    .toolbar-header {
       display: flex;
-      justify-content: space-between;
+      justify-content: between;
       align-items: center;
       margin-bottom: 20px;
       flex-wrap: wrap;
-      gap: 15px;
+      gap: 20px;
     }
-    .table-header h2 {
-      color: #333;
-      margin: 0;
+    
+    .toolbar-title {
+      font-size: 20px;
+      font-weight: 600;
+      color: #1e293b;
+      display: flex;
+      align-items: center;
+      gap: 10px;
     }
-    .controls {
+    
+    .toolbar-actions {
       display: flex;
       gap: 10px;
-      align-items: center;
       flex-wrap: wrap;
     }
-    .btn-export {
-      background: #4CAF50;
-      color: white;
+    
+    /* Search Bar */
+    .search-container {
+      position: relative;
+      margin-bottom: 20px;
+    }
+    
+    .search-input {
+      width: 100%;
+      padding: 12px 45px 12px 16px;
+      border: 2px solid #e2e8f0;
+      border-radius: 8px;
+      font-size: 14px;
+      transition: border-color 0.3s;
+    }
+    
+    .search-input:focus {
+      outline: none;
+      border-color: #3b82f6;
+    }
+    
+    .search-icon {
+      position: absolute;
+      right: 15px;
+      top: 50%;
+      transform: translateY(-50%);
+      color: #64748b;
+    }
+    
+    /* Filters */
+    .filters {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 15px;
+      margin-bottom: 20px;
+    }
+    
+    .filter-group {
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+    }
+    
+    .filter-label {
+      font-size: 12px;
+      font-weight: 600;
+      color: #64748b;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    
+    .filter-select {
+      padding: 10px 12px;
+      border: 2px solid #e2e8f0;
+      border-radius: 6px;
+      font-size: 14px;
+      background: white;
+      transition: border-color 0.3s;
+    }
+    
+    .filter-select:focus {
+      outline: none;
+      border-color: #3b82f6;
+    }
+    
+    /* Buttons */
+    .btn {
       padding: 10px 20px;
       border: none;
-      border-radius: 5px;
+      border-radius: 6px;
       font-size: 14px;
+      font-weight: 500;
       cursor: pointer;
-      text-decoration: none;
+      transition: all 0.3s;
       display: inline-flex;
       align-items: center;
       gap: 8px;
-      transition: background 0.3s;
     }
-    .btn-export:hover {
-      background: #45a049;
-    }
-    .btn-export:disabled {
-      background: #cccccc;
-      cursor: not-allowed;
-    }
-    .btn-secondary {
-      background: #2196F3;
+    
+    .btn-primary {
+      background: linear-gradient(135deg, #3b82f6, #1d4ed8);
       color: white;
-      padding: 10px 20px;
-      border: none;
-      border-radius: 5px;
-      font-size: 14px;
-      cursor: pointer;
-      transition: background 0.3s;
     }
+    
+    .btn-primary:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 4px 12px rgba(59, 130, 246, 0.4);
+    }
+    
+    .btn-success {
+      background: linear-gradient(135deg, #10b981, #059669);
+      color: white;
+    }
+    
+    .btn-success:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 4px 12px rgba(16, 185, 129, 0.4);
+    }
+    
+    .btn-secondary {
+      background: #f1f5f9;
+      color: #475569;
+      border: 1px solid #e2e8f0;
+    }
+    
     .btn-secondary:hover {
-      background: #1976D2;
+      background: #e2e8f0;
     }
-    .filter-select {
-      padding: 8px 12px;
-      border: 1px solid #ddd;
-      border-radius: 5px;
-      font-size: 14px;
+    
+    .btn-sm {
+      padding: 6px 12px;
+      font-size: 12px;
     }
-    .table-wrapper {
+    
+    /* Table */
+    .table-container {
       overflow-x: auto;
     }
-    table {
+    
+    .table {
       width: 100%;
       border-collapse: collapse;
-      margin-top: 10px;
     }
-    thead {
-      background: #f5f5f5;
-      border-bottom: 2px solid #25D366;
+    
+    .table th,
+    .table td {
+      padding: 16px 12px;
+      text-align: left;
+      border-bottom: 1px solid #f1f5f9;
+    }
+    
+    .table th {
+      background: #fafbfc;
+      font-weight: 600;
+      color: #374151;
+      font-size: 13px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
       position: sticky;
       top: 0;
+      z-index: 1;
     }
-    th {
-      padding: 12px;
-      text-align: left;
-      font-weight: bold;
-      color: #333;
-      font-size: 13px;
-      white-space: nowrap;
+    
+    .table tbody tr {
+      transition: background-color 0.2s;
     }
-    td {
-      padding: 12px;
-      border-bottom: 1px solid #eee;
-      font-size: 13px;
+    
+    .table tbody tr:hover {
+      background: #f8fafc;
     }
-    tbody tr:hover {
-      background: #f9f9f9;
+    
+    /* Tags */
+    .tag {
+      padding: 4px 8px;
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
     }
-    tbody tr.new-row {
-      background: #e8f5e9;
-      animation: fadeIn 0.5s;
-    }
+    
     .tag-whatsapp {
-      background: #25D366;
-      color: white;
-      padding: 4px 8px;
-      border-radius: 3px;
-      font-size: 11px;
-      font-weight: bold;
+      background: #dcfce7;
+      color: #166534;
     }
+    
     .tag-email {
-      background: #1976D2;
-      color: white;
-      padding: 4px 8px;
-      border-radius: 3px;
-      font-size: 11px;
-      font-weight: bold;
+      background: #dbeafe;
+      color: #1e40af;
     }
-    .tag-new {
-      background: #4CAF50;
-      color: white;
-      padding: 4px 10px;
-      border-radius: 3px;
-      font-size: 12px;
-      font-weight: bold;
+    
+    .tag-active {
+      background: #dcfce7;
+      color: #166534;
     }
+    
+    .tag-deleted {
+      background: #fecaca;
+      color: #991b1b;
+    }
+    
     .tag-sold {
-      background: #d32f2f;
-      color: white;
-      padding: 4px 10px;
-      border-radius: 3px;
-      font-size: 12px;
-      font-weight: bold;
+      background: #fed7d7;
+      color: #c53030;
     }
+    
     .price-tag {
-      background: #2196F3;
+      background: #e0f2fe;
+      color: #0277bd;
+      padding: 4px 8px;
+      border-radius: 4px;
+      font-weight: 600;
+    }
+    
+    /* Pagination */
+    .pagination {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      gap: 10px;
+      padding: 25px;
+      border-top: 1px solid #e2e8f0;
+      background: #fafbfc;
+    }
+    
+    .pagination-info {
+      margin-right: 20px;
+      font-size: 14px;
+      color: #64748b;
+    }
+    
+    .pagination-btn {
+      padding: 8px 12px;
+      border: 1px solid #e2e8f0;
+      background: white;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 14px;
+      transition: all 0.2s;
+    }
+    
+    .pagination-btn:hover:not(.disabled) {
+      background: #f1f5f9;
+      border-color: #cbd5e1;
+    }
+    
+    .pagination-btn.active {
+      background: #3b82f6;
       color: white;
-      padding: 4px 10px;
-      border-radius: 3px;
-      font-weight: bold;
+      border-color: #3b82f6;
     }
-    .no-data {
+    
+    .pagination-btn.disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    
+    /* Loading and Empty States */
+    .loading {
       text-align: center;
-      padding: 40px;
-      color: #999;
+      padding: 50px;
+      color: #64748b;
     }
-    .location-text {
-      color: #666;
-      line-height: 1.4;
+    
+    .empty-state {
+      text-align: center;
+      padding: 60px 20px;
+      color: #64748b;
     }
-    .sender-info {
-      font-weight: 500;
-      color: #333;
+    
+    .empty-state-icon {
+      font-size: 48px;
+      margin-bottom: 20px;
+      opacity: 0.5;
     }
-    .email-info {
-      color: #666;
-      font-size: 12px;
+    
+    /* Modal for Templates */
+    .modal {
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0,0,0,0.5);
+      z-index: 1000;
+      align-items: center;
+      justify-content: center;
     }
-    @keyframes fadeIn {
-      from { opacity: 0; transform: translateY(-10px); }
-      to { opacity: 1; transform: translateY(0); }
+    
+    .modal.show {
+      display: flex;
     }
+    
+    .modal-content {
+      background: white;
+      border-radius: 12px;
+      width: 90%;
+      max-width: 600px;
+      max-height: 90vh;
+      overflow-y: auto;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+    }
+    
+    .modal-header {
+      padding: 25px;
+      border-bottom: 1px solid #e2e8f0;
+      display: flex;
+      justify-content: between;
+      align-items: center;
+    }
+    
+    .modal-title {
+      font-size: 18px;
+      font-weight: 600;
+      margin: 0;
+    }
+    
+    .modal-close {
+      background: none;
+      border: none;
+      font-size: 24px;
+      cursor: pointer;
+      color: #64748b;
+    }
+    
+    .modal-body {
+      padding: 25px;
+    }
+    
+    .form-group {
+      margin-bottom: 20px;
+    }
+    
+    .form-label {
+      display: block;
+      margin-bottom: 8px;
+      font-weight: 600;
+      color: #374151;
+    }
+    
+    .form-control {
+      width: 100%;
+      padding: 12px;
+      border: 2px solid #e2e8f0;
+      border-radius: 6px;
+      font-size: 14px;
+      transition: border-color 0.3s;
+    }
+    
+    .form-control:focus {
+      outline: none;
+      border-color: #3b82f6;
+    }
+    
+    /* Toast Notifications */
     .toast {
       position: fixed;
       bottom: 20px;
       right: 20px;
-      background: #4CAF50;
+      background: #1f2937;
       color: white;
-      padding: 15px 20px;
-      border-radius: 5px;
-      box-shadow: 0 2px 10px rgba(0,0,0,0.2);
-      z-index: 1000;
-      animation: slideIn 0.3s;
+      padding: 16px 20px;
+      border-radius: 8px;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+      z-index: 1001;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      transform: translateX(400px);
+      transition: transform 0.3s;
     }
+    
+    .toast.show {
+      transform: translateX(0);
+    }
+    
+    .toast.success {
+      background: #059669;
+    }
+    
     .toast.error {
-      background: #d32f2f;
+      background: #dc2626;
     }
-    @keyframes slideIn {
-      from { transform: translateX(400px); }
-      to { transform: translateX(0); }
+    
+    /* Responsive */
+    @media (max-width: 768px) {
+      .container {
+        padding: 0 15px;
+      }
+      
+      .toolbar {
+        padding: 20px 15px;
+      }
+      
+      .toolbar-header {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 15px;
+      }
+      
+      .filters {
+        grid-template-columns: 1fr;
+      }
+      
+      .stats {
+        grid-template-columns: repeat(2, 1fr);
+      }
     }
   </style>
 </head>
 <body>
   <div class="header">
-    <h1>WhatsApp & Email Tracker Dashboard</h1>
-    <p class="subtitle">Real-time monitoring of WhatsApp groups and email messages with AI-powered logistics data extraction</p>
+    <h1>📊 Enhanced Analytics Dashboard</h1>
+    <p class="subtitle">Comprehensive logistics data management with automated responses</p>
     <div class="nav">
-      <a href="/dashboard">Dashboard</a>
-      <a href="/groups">Manage Groups</a>
-      <a href="/api/service-status" target="_blank">Service Status</a>
+      <a href="/dashboard">📊 Dashboard</a>
+      <a href="/groups">👥 Manage Groups</a>
+      <a href="#" onclick="showTemplateModal()">⚙️ Response Templates</a>
+      <a href="/api/service-status" target="_blank">🔍 Service Status</a>
     </div>
   </div>
 
   <div class="container">
-    <!-- Service Status Cards -->
+    <!-- Service Status -->
     <div class="service-status">
       <div class="status-card whatsapp">
-        <div class="status-icon">📱</div>
-        <div class="status-info">
-          <h3>WhatsApp Service</h3>
-          <p><%= trackedGroups.length %> groups tracked</p>
+        <div class="status-header">
+          <span class="status-title">📱 WhatsApp Service</span>
+          <span class="status-badge <%= whatsappStatus.isReady ? 'status-connected' : 'status-disconnected' %>">
+            <%= whatsappStatus.isReady ? 'Connected' : 'Disconnected' %>
+          </span>
         </div>
-        <div class="status-badge <%= whatsappStatus.isReady ? 'status-connected' : 'status-disconnected' %>">
-          <%= whatsappStatus.isReady ? 'Connected' : 'Disconnected' %>
-        </div>
+        <p><%= trackedGroups.length %> groups tracked</p>
       </div>
       
       <div class="status-card email">
-        <div class="status-icon">📧</div>
-        <div class="status-info">
-          <h3>Email Service</h3>
-          <p>IMAP monitoring active</p>
+        <div class="status-header">
+          <span class="status-title">📧 Email Service</span>
+          <span class="status-badge <%= emailStatus.isConnected ? 'status-connected' : 'status-disconnected' %>">
+            <%= emailStatus.isConnected ? 'Connected' : 'Disconnected' %>
+          </span>
         </div>
-        <div class="status-badge <%= emailStatus.isConnected ? 'status-connected' : 'status-disabled' %>">
-          <%= emailStatus.isConnected ? 'Connected' : 'Disabled' %>
-        </div>
+        <p>IMAP monitoring active</p>
       </div>
     </div>
 
-    <!-- Statistics Cards -->
+    <!-- Statistics -->
     <div class="stats">
       <div class="stat-card">
-        <h3>Total Messages</h3>
-        <div class="number" id="totalMessages"><%= stats.totalMessages %></div>
+        <div class="stat-number" id="totalMessages"><%= stats.totalMessages %></div>
+        <div class="stat-label">Total Messages</div>
       </div>
       <div class="stat-card">
-        <h3>WhatsApp Messages</h3>
-        <div class="number" id="whatsappMessages"><%= stats.whatsappMessages %></div>
-      </div>
-      <div class="stat-card email-stat">
-        <h3>Email Messages</h3>
-        <div class="number" id="emailMessages"><%= stats.emailMessages %></div>
+        <div class="stat-number" id="activeMessages"><%= stats.activeMessages %></div>
+        <div class="stat-label">Active Messages</div>
       </div>
       <div class="stat-card">
-        <h3>AI Extracted Shipments</h3>
-        <div class="number" id="totalShipments"><%= stats.totalShipments %></div>
+        <div class="stat-number" id="last24hMessages"><%= stats.last24hMessages %></div>
+        <div class="stat-label">Last 24h</div>
       </div>
       <div class="stat-card">
-        <h3>Today's Messages</h3>
-        <div class="number" id="todayMessages"><%= stats.todayMessages %></div>
+        <div class="stat-number" id="totalShipments"><%= stats.totalShipments %></div>
+        <div class="stat-label">Total Shipments</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number" id="whatsappMessages"><%= stats.whatsappMessages %></div>
+        <div class="stat-label">WhatsApp</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number" id="emailMessages"><%= stats.emailMessages %></div>
+        <div class="stat-label">Email</div>
       </div>
     </div>
 
-    <!-- Main Data Table -->
-    <div class="table-container">
-      <div class="table-header">
-        <h2>📦 AI Extracted Shipment Data</h2>
-        <div class="controls">
-          <select class="filter-select" id="typeFilter" onchange="filterMessages()">
-            <option value="all">All Messages</option>
-            <option value="whatsapp">WhatsApp Only</option>
-            <option value="email">Email Only</option>
-          </select>
-          <button class="btn-secondary" onclick="checkEmails()" id="checkEmailsBtn">
-            📧 Check Emails
-          </button>
-          <button class="btn-export" id="exportBtn" onclick="exportToExcel()" title="Download Excel file with shipment data">
-            📥 Download Excel
-          </button>
+    <!-- Main Content -->
+    <div class="main-content">
+      <!-- Toolbar -->
+      <div class="toolbar">
+        <div class="toolbar-header">
+          <div class="toolbar-title">
+            📦 Logistics Offers Management
+          </div>
+          <div class="toolbar-actions">
+            <button class="btn btn-secondary btn-sm" onclick="refreshData()">
+              🔄 Refresh
+            </button>
+            <button class="btn btn-primary btn-sm" onclick="checkEmails()">
+              📧 Check Emails
+            </button>
+            <button class="btn btn-success btn-sm" onclick="exportData()">
+              📥 Export Excel
+            </button>
+          </div>
+        </div>
+
+        <!-- Search -->
+        <div class="search-container">
+          <input type="text" class="search-input" id="searchInput" placeholder="Search by sender, location, company, or any details...">
+          <span class="search-icon">🔍</span>
+        </div>
+
+        <!-- Filters -->
+        <div class="filters">
+          <div class="filter-group">
+            <label class="filter-label">Message Type</label>
+            <select class="filter-select" id="typeFilter">
+              <option value="all">All Types</option>
+              <option value="whatsapp">WhatsApp</option>
+              <option value="email">Email</option>
+            </select>
+          </div>
+          
+          <div class="filter-group">
+            <label class="filter-label">Status</label>
+            <select class="filter-select" id="statusFilter">
+              <option value="active">Active Only</option>
+              <option value="all">All (Inc. Deleted)</option>
+              <option value="deleted">Deleted Only</option>
+            </select>
+          </div>
+          
+          <div class="filter-group">
+            <label class="filter-label">Time Period</label>
+            <select class="filter-select" id="timeframeFilter">
+              <option value="all">All Time</option>
+              <option value="last24h">Last 24 Hours</option>
+              <option value="last7d">Last 7 Days</option>
+              <option value="last30d">Last 30 Days</option>
+            </select>
+          </div>
+          
+          <div class="filter-group">
+            <label class="filter-label">Per Page</label>
+            <select class="filter-select" id="limitFilter">
+              <option value="50">50</option>
+              <option value="100" selected>100</option>
+              <option value="250">250</option>
+              <option value="500">500</option>
+              <option value="1000">1000</option>
+            </select>
+          </div>
         </div>
       </div>
-      
-      <div class="table-wrapper">
-        <table id="shipmentsTable">
+
+      <!-- Table -->
+      <div class="table-container">
+        <table class="table" id="dataTable">
           <thead>
             <tr>
               <th>Type</th>
+              <th>Status</th>
               <th>Source</th>
               <th>Sender</th>
-              <th>Company</th>
-              <th>Loading Location</th>
-              <th>Delivery Location</th>
+              <th>Route</th>
               <th>Price</th>
               <th>Comments</th>
-              <th>Status</th>
-              <th>Date & Time</th>
+              <th>Date</th>
+              <th>Actions</th>
             </tr>
           </thead>
-          <tbody id="shipmentsBody">
+          <tbody id="tableBody">
             <tr>
-              <td colspan="10" class="no-data">Loading shipment data...</td>
+              <td colspan="9" class="loading">🔄 Loading data...</td>
             </tr>
           </tbody>
         </table>
       </div>
+
+      <!-- Pagination -->
+      <div class="pagination" id="pagination">
+        <div class="pagination-info" id="paginationInfo">
+          Loading...
+        </div>
+        <div id="paginationControls">
+          <!-- Pagination buttons will be inserted here -->
+        </div>
+      </div>
     </div>
   </div>
 
-  <script src="/socket.io/socket.io.js"></script>
+  <!-- Template Modal -->
+  <div class="modal" id="templateModal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3 class="modal-title">Response Templates</h3>
+        <button class="modal-close" onclick="hideTemplateModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label class="form-label">WhatsApp Template</label>
+          <textarea class="form-control" id="whatsappTemplate" rows="4" placeholder="Enter WhatsApp response template..."></textarea>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Email Template</label>
+          <textarea class="form-control" id="emailTemplate" rows="4" placeholder="Enter email response template..."></textarea>
+        </div>
+        <div style="display: flex; gap: 10px; justify-content: flex-end;">
+          <button class="btn btn-secondary" onclick="hideTemplateModal()">Cancel</button>
+          <button class="btn btn-primary" onclick="saveTemplates()">Save Templates</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <script>
-    const socket = io();
-    let allShipments = [];
-    let currentFilter = 'all';
+    // Global variables
+    let currentPage = 1;
+    let currentFilters = {
+      type: 'all',
+      status: 'active', 
+      timeframe: 'all',
+      search: '',
+      limit: 100
+    };
+    let templates = {};
 
-    // Load initial data from page
-    function loadInitialData() {
-      const messages = JSON.parse('<%- JSON.stringify(messages).replace(/\\/g, '\\\\').replace(/'/g, "\\'") %>');
-      processMessages(messages);
-    }
+    // Initialize dashboard
+    document.addEventListener('DOMContentLoaded', function() {
+      setupEventListeners();
+      loadTemplates();
+      loadData();
+    });
 
-    function processMessages(messages) {
-      allShipments = [];
+    function setupEventListeners() {
+      // Filter change handlers
+      document.getElementById('typeFilter').addEventListener('change', onFiltersChange);
+      document.getElementById('statusFilter').addEventListener('change', onFiltersChange);
+      document.getElementById('timeframeFilter').addEventListener('change', onFiltersChange);
+      document.getElementById('limitFilter').addEventListener('change', onFiltersChange);
       
-      messages.forEach(msg => {
-        if (msg.aiExtracted && Array.isArray(msg.aiExtracted) && msg.aiExtracted.length > 0) {
-          msg.aiExtracted.forEach(shipment => {
-            allShipments.push({
-              ...shipment,
-              type: msg.type,
-              groupName: msg.groupName || null,
-              senderNumber: msg.senderNumber,
-              senderName: msg.senderName || msg.senderNumber || msg.senderEmail,
-              senderEmail: msg.senderEmail,
-              company: msg.company,
-              created_at: msg.created_at,
-              status: msg.status,
-              messageId: msg._id,
-              source: msg.type === 'whatsapp' ? (msg.groupName || 'WhatsApp') : 'Email'
-            });
-          });
-        }
+      // Search with debounce
+      let searchTimeout;
+      document.getElementById('searchInput').addEventListener('input', function(e) {
+        clearTimeout(searchTimeout);
+        searchTimeout = setTimeout(() => {
+          currentFilters.search = e.target.value;
+          currentPage = 1;
+          loadData();
+        }, 500);
       });
-
-      updateTable();
-      updateStats();
     }
 
-    function updateTable() {
-      const tbody = document.getElementById('shipmentsBody');
-      
-      // Filter shipments based on current filter
-      let filteredShipments = allShipments;
-      if (currentFilter !== 'all') {
-        filteredShipments = allShipments.filter(s => s.type === currentFilter);
+    function onFiltersChange() {
+      currentFilters = {
+        type: document.getElementById('typeFilter').value,
+        status: document.getElementById('statusFilter').value,
+        timeframe: document.getElementById('timeframeFilter').value,
+        search: document.getElementById('searchInput').value,
+        limit: parseInt(document.getElementById('limitFilter').value)
+      };
+      currentPage = 1;
+      loadData();
+    }
+
+    async function loadData() {
+      try {
+        const params = new URLSearchParams({
+          ...currentFilters,
+          page: currentPage
+        });
+
+        const response = await fetch(`/api/messages?${params}`);
+        const data = await response.json();
+
+        if (data.success) {
+          renderTable(data.messages);
+          renderPagination(data.pagination);
+        } else {
+          showToast('Error loading data: ' + data.error, 'error');
+        }
+      } catch (error) {
+        console.error('Error loading data:', error);
+        showToast('Error loading data', 'error');
       }
+    }
+
+    function renderTable(messages) {
+      const tbody = document.getElementById('tableBody');
       
-      if (filteredShipments.length === 0) {
-        tbody.innerHTML = `<tr><td colspan="10" class="no-data">No shipment data available for the selected filter.</td></tr>`;
+      if (messages.length === 0) {
+        tbody.innerHTML = `
+          <tr>
+            <td colspan="9" class="empty-state">
+              <div class="empty-state-icon">📭</div>
+              <div>No data found matching your criteria</div>
+            </td>
+          </tr>
+        `;
         return;
       }
 
-      tbody.innerHTML = filteredShipments.map((shipment, index) => {
-        const loading = formatLocationWithPostcode(
-          shipment.loading_city, 
-          shipment.loading_country, 
-          shipment.loading_postcode
-        );
-        const delivery = formatLocationWithPostcode(
-          shipment.delivery_city, 
-          shipment.delivery_country, 
-          shipment.delivery_postcode
-        );
-        const price = shipment.price ? `€${shipment.price}` : '-';
-        const comments = shipment.comments || '-';
-        const status = getStatusTag(shipment.status);
-        const typeTag = getTypeTag(shipment.type);
-        const dateStr = new Date(shipment.created_at).toLocaleString();
-        const company = shipment.company || '-';
-
-        // Enhanced sender info for emails
-        let senderDisplay = escapeHtml(shipment.senderName);
-        if (shipment.type === 'email' && shipment.senderEmail) {
-          senderDisplay += `<br><span class="email-info">${escapeHtml(shipment.senderEmail)}</span>`;
-        }
-
-        return `
-          <tr class="new-row">
-            <td>${typeTag}</td>
-            <td><strong>${escapeHtml(shipment.source)}</strong></td>
-            <td><span class="sender-info">${senderDisplay}</span></td>
-            <td>${escapeHtml(company)}</td>
-            <td><div class="location-text">${escapeHtml(loading)}</div></td>
-            <td><div class="location-text">${escapeHtml(delivery)}</div></td>
-            <td>${price !== '-' ? `<span class="price-tag">${escapeHtml(price)}</span>` : price}</td>
-            <td>${escapeHtml(comments)}</td>
-            <td>${status}</td>
-            <td>${dateStr}</td>
-          </tr>
-        `;
-      }).join('');
-    }
-
-    function updateStats() {
-      const whatsappCount = allShipments.filter(s => s.type === 'whatsapp').length;
-      const emailCount = allShipments.filter(s => s.type === 'email').length;
+      const rows = [];
       
-      document.getElementById('totalShipments').textContent = allShipments.length;
-      document.getElementById('whatsappMessages').textContent = whatsappCount;
-      document.getElementById('emailMessages').textContent = emailCount;
+      messages.forEach(msg => {
+        if (msg.aiExtracted && msg.aiExtracted.length > 0) {
+          msg.aiExtracted.forEach((shipment, index) => {
+            const route = `${shipment.loading_city || '?'}, ${shipment.loading_country || '?'} → ${shipment.delivery_city || '?'}, ${shipment.delivery_country || '?'}`;
+            const price = shipment.price ? `€${shipment.price}` : '-';
+            
+            rows.push(`
+              <tr data-message-id="${msg._id}">
+                <td><span class="tag tag-${msg.type}">${msg.type}</span></td>
+                <td><span class="tag tag-${msg.isDeleted ? 'deleted' : 'active'}">${msg.isDeleted ? 'Deleted' : 'Active'}</span></td>
+                <td><strong>${escapeHtml(msg.groupName || 'Email')}</strong></td>
+                <td>
+                  <div style="font-weight: 500;">${escapeHtml(msg.senderName || 'Unknown')}</div>
+                  <div style="font-size: 12px; color: #64748b;">${escapeHtml(msg.senderEmail || msg.senderNumber || '')}</div>
+                </td>
+                <td>
+                  <div style="font-size: 13px; line-height: 1.4;">${escapeHtml(route)}</div>
+                  ${shipment.loading_postcode || shipment.delivery_postcode ? 
+                    `<div style="font-size: 11px; color: #64748b;">${shipment.loading_postcode || ''} → ${shipment.delivery_postcode || ''}</div>` : 
+                    ''}
+                </td>
+                <td>${price !== '-' ? `<span class="price-tag">${price}</span>` : price}</td>
+                <td>
+                  <div style="max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${escapeHtml(shipment.comments || '')}">
+                    ${escapeHtml(shipment.comments || '-')}
+                  </div>
+                </td>
+                <td>
+                  <div style="font-size: 13px;">${new Date(msg.created_at).toLocaleDateString()}</div>
+                  <div style="font-size: 11px; color: #64748b;">${new Date(msg.created_at).toLocaleTimeString()}</div>
+                </td>
+                <td>
+                  ${!msg.isDeleted ? `
+                    <button class="btn btn-primary btn-sm" onclick="sendResponse('${msg._id}', '${msg.type}')">
+                      📤 Respond
+                    </button>
+                  ` : '-'}
+                </td>
+              </tr>
+            `);
+          });
+        }
+      });
+      
+      tbody.innerHTML = rows.join('');
     }
 
-    function filterMessages() {
-      currentFilter = document.getElementById('typeFilter').value;
-      updateTable();
+    function renderPagination(pagination) {
+      const info = document.getElementById('paginationInfo');
+      const controls = document.getElementById('paginationControls');
+      
+      // Update info
+      const start = ((pagination.currentPage - 1) * pagination.limit) + 1;
+      const end = Math.min(pagination.currentPage * pagination.limit, pagination.totalCount);
+      info.textContent = `Showing ${start}-${end} of ${pagination.totalCount} results`;
+      
+      // Generate pagination controls
+      let controlsHtml = '';
+      
+      // Previous button
+      controlsHtml += `
+        <button class="pagination-btn ${!pagination.hasPrevPage ? 'disabled' : ''}" 
+                onclick="${pagination.hasPrevPage ? `changePage(${pagination.currentPage - 1})` : ''}">
+          ‹ Previous
+        </button>
+      `;
+      
+      // Page numbers
+      const startPage = Math.max(1, pagination.currentPage - 2);
+      const endPage = Math.min(pagination.totalPages, pagination.currentPage + 2);
+      
+      if (startPage > 1) {
+        controlsHtml += `<button class="pagination-btn" onclick="changePage(1)">1</button>`;
+        if (startPage > 2) controlsHtml += `<span>...</span>`;
+      }
+      
+      for (let i = startPage; i <= endPage; i++) {
+        controlsHtml += `
+          <button class="pagination-btn ${i === pagination.currentPage ? 'active' : ''}" 
+                  onclick="changePage(${i})">
+            ${i}
+          </button>
+        `;
+      }
+      
+      if (endPage < pagination.totalPages) {
+        if (endPage < pagination.totalPages - 1) controlsHtml += `<span>...</span>`;
+        controlsHtml += `<button class="pagination-btn" onclick="changePage(${pagination.totalPages})">${pagination.totalPages}</button>`;
+      }
+      
+      // Next button
+      controlsHtml += `
+        <button class="pagination-btn ${!pagination.hasNextPage ? 'disabled' : ''}" 
+                onclick="${pagination.hasNextPage ? `changePage(${pagination.currentPage + 1})` : ''}">
+          Next ›
+        </button>
+      `;
+      
+      controls.innerHTML = controlsHtml;
     }
 
-    function getTypeTag(type) {
-      if (type === 'whatsapp') return '<span class="tag-whatsapp">WhatsApp</span>';
-      if (type === 'email') return '<span class="tag-email">Email</span>';
-      return '<span class="tag-new">Unknown</span>';
+    function changePage(page) {
+      currentPage = page;
+      loadData();
     }
 
-    function getStatusTag(status) {
-      if (status === 'sold') return '<span class="tag-sold">SOLD</span>';
-      return '<span class="tag-new">NEW</span>';
+    async function sendResponse(messageId, messageType) {
+      try {
+        const template = templates[messageType] || `Thank you for your logistics offer. We would like to reserve this shipment. Please confirm availability.`;
+        
+        const response = await fetch('/api/send-response', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            messageId,
+            template
+          })
+        });
+
+        const result = await response.json();
+        
+        if (result.success) {
+          showToast(`✅ Response sent successfully to ${result.sentTo}`, 'success');
+        } else {
+          showToast(`❌ Failed to send response: ${result.message}`, 'error');
+        }
+      } catch (error) {
+        console.error('Error sending response:', error);
+        showToast('❌ Error sending response', 'error');
+      }
     }
 
-    function formatLocationWithPostcode(city, country, postcode) {
-      let parts = [];
-      if (postcode) parts.push(postcode);
-      if (city) parts.push(city);
-      if (country) parts.push(country);
-      return parts.length > 0 ? parts.join(', ') : 'Unknown';
+    async function loadTemplates() {
+      try {
+        const response = await fetch('/api/templates');
+        const data = await response.json();
+        
+        if (data.success) {
+          templates = data.templates;
+          document.getElementById('whatsappTemplate').value = templates.whatsapp || '';
+          document.getElementById('emailTemplate').value = templates.email || '';
+        }
+      } catch (error) {
+        console.error('Error loading templates:', error);
+      }
+    }
+
+    async function saveTemplates() {
+      try {
+        const whatsappTemplate = document.getElementById('whatsappTemplate').value;
+        const emailTemplate = document.getElementById('emailTemplate').value;
+        
+        const response = await fetch('/api/templates', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            whatsappTemplate,
+            emailTemplate
+          })
+        });
+
+        const result = await response.json();
+        
+        if (result.success) {
+          templates = result.templates;
+          hideTemplateModal();
+          showToast('✅ Templates saved successfully', 'success');
+        } else {
+          showToast('❌ Failed to save templates', 'error');
+        }
+      } catch (error) {
+        console.error('Error saving templates:', error);
+        showToast('❌ Error saving templates', 'error');
+      }
+    }
+
+    function showTemplateModal() {
+      document.getElementById('templateModal').classList.add('show');
+    }
+
+    function hideTemplateModal() {
+      document.getElementById('templateModal').classList.remove('show');
+    }
+
+    function refreshData() {
+      loadData();
+      showToast('📊 Data refreshed', 'success');
+    }
+
+    async function checkEmails() {
+      try {
+        const response = await fetch('/api/check-emails', { method: 'POST' });
+        const result = await response.json();
+        
+        if (result.success) {
+          showToast('📧 Email check initiated', 'success');
+          setTimeout(refreshData, 2000);
+        } else {
+          showToast('❌ Email check failed', 'error');
+        }
+      } catch (error) {
+        showToast('❌ Error checking emails', 'error');
+      }
+    }
+
+    function exportData() {
+      const params = new URLSearchParams(currentFilters);
+      window.open(`/api/export-excel?${params}`, '_blank');
+      showToast('📥 Export started', 'success');
+    }
+
+    function showToast(message, type = 'success') {
+      // Remove existing toast
+      const existingToast = document.querySelector('.toast');
+      if (existingToast) {
+        existingToast.remove();
+      }
+
+      // Create new toast
+      const toast = document.createElement('div');
+      toast.className = `toast ${type}`;
+      toast.textContent = message;
+      
+      document.body.appendChild(toast);
+      
+      // Show toast
+      setTimeout(() => toast.classList.add('show'), 100);
+      
+      // Hide toast after 3 seconds
+      setTimeout(() => {
+        toast.classList.remove('show');
+        setTimeout(() => toast.remove(), 300);
+      }, 3000);
     }
 
     function escapeHtml(text) {
       if (!text) return '';
-      const map = {
-        '&': '&amp;',
-        '<': '&lt;',
-        '>': '&gt;',
-        '"': '&quot;',
-        "'": '&#039;'
-      };
-      return text.replace(/[&<>"']/g, m => map[m]);
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
     }
 
-    function showToast(message, isError = false) {
-      const toast = document.createElement('div');
-      toast.className = `toast ${isError ? 'error' : ''}`;
-      toast.textContent = message;
-      document.body.appendChild(toast);
-      setTimeout(() => toast.remove(), 3000);
-    }
-
-    async function checkEmails() {
-      const btn = document.getElementById('checkEmailsBtn');
-      btn.disabled = true;
-      btn.textContent = '⏳ Checking...';
-      
-      try {
-        const response = await fetch('/api/check-emails', { method: 'POST' });
-        const data = await response.json();
-        
-        if (data.success) {
-          showToast('✅ Email check initiated');
-        } else {
-          showToast('❌ Email check failed', true);
-        }
-      } catch (error) {
-        showToast('❌ Error checking emails', true);
-      } finally {
-        btn.disabled = false;
-        btn.textContent = '📧 Check Emails';
-      }
-    }
-
-    async function exportToExcel() {
-      if (allShipments.length === 0) {
-        showToast('No data to export', true);
-        return;
-      }
-
-      try {
-        const btn = document.getElementById('exportBtn');
-        btn.disabled = true;
-        btn.textContent = '⏳ Generating...';
-
-        const response = await fetch('/api/export-excel');
-        
-        if (!response.ok) {
-          throw new Error('Export failed');
-        }
-
-        const blob = await response.blob();
-        const url = window.URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `shipments_${new Date().toISOString().split('T')[0]}.xlsx`;
-        document.body.appendChild(a);
-        a.click();
-        window.URL.revokeObjectURL(url);
-        a.remove();
-
-        showToast('✅ Excel file downloaded successfully!');
-      } catch (error) {
-        console.error('Export error:', error);
-        showToast('❌ Failed to export Excel file', true);
-      } finally {
-        const btn = document.getElementById('exportBtn');
-        btn.disabled = false;
-        btn.textContent = '📥 Download Excel';
-      }
-    }
-
-    // Socket event handlers
-    socket.on('newMessage', (message) => {
-      if (message.aiExtracted && Array.isArray(message.aiExtracted) && message.aiExtracted.length > 0) {
-        message.aiExtracted.forEach(shipment => {
-          allShipments.unshift({
-            ...shipment,
-            type: message.type,
-            groupName: message.groupName || null,
-            senderNumber: message.senderNumber,
-            senderName: message.senderName || message.senderNumber || message.senderEmail,
-            senderEmail: message.senderEmail,
-            company: message.company,
-            created_at: message.created_at,
-            status: message.status,
-            messageId: message._id,
-            source: message.type === 'whatsapp' ? (message.groupName || 'WhatsApp') : 'Email'
-          });
-        });
-        updateTable();
-        updateStats();
-        
-        // Update total messages counter
-        const currentTotal = parseInt(document.getElementById('totalMessages').textContent);
-        document.getElementById('totalMessages').textContent = currentTotal + 1;
-        
-        showToast(`📨 New ${message.type} message processed with ${message.aiExtracted.length} shipment(s)`);
+    // Close modal when clicking outside
+    window.addEventListener('click', function(e) {
+      if (e.target.classList.contains('modal')) {
+        hideTemplateModal();
       }
     });
-
-    socket.on('messageDeleted', (payload) => {
-      allShipments = allShipments.filter(s => s.messageId !== payload._id);
-      updateTable();
-      updateStats();
-    });
-
-    socket.on('messageDeletedBatch', (data) => {
-      console.log(`${data.deletedCount} messages auto-deleted`);
-      allShipments = allShipments.filter(s => !data.messageIds.includes(s.messageId));
-      updateTable();
-      updateStats();
-      showToast(`🗑️ ${data.deletedCount} expired messages removed`);
-    });
-
-    // Service status updates
-    socket.on('email:connected', () => {
-      showToast('📧 Email service connected');
-      setTimeout(() => location.reload(), 2000);
-    });
-
-    socket.on('email:disconnected', () => {
-      showToast('⚠️ Email service disconnected', true);
-    });
-
-    // Load initial data on page load
-    window.addEventListener('load', loadInitialData);
   </script>
 </body>
 </html>

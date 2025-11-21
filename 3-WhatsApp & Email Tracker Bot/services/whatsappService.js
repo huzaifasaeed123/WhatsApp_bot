@@ -1,26 +1,23 @@
-// services/whatsappService.js (updated to align with new Message model)
+// services/whatsappService.js (enhanced with send message capability)
 const { Client, LocalAuth } = require("whatsapp-web.js");
 const qrcode = require("qrcode");
 const Message = require("../models/Message");
 const TrackedGroup = require("../models/TrackedGroup");
-const { analyzeMessage } = require('./aiProcessor'); // import AI service
+const { analyzeMessage } = require('./aiProcessor');
 
 class WhatsAppService {
   constructor() {
     this.client = null;
     this.isReady = false;
     this.qrCode = null;
-
-    // in-memory cache: messageId -> savedMessageMongoId
     this.msgCache = new Map();
-    // optional: limit cache size
     this.maxCacheSize = 5000;
   }
 
   async saveIncomingMessage(msg, chat, io) {
     const messageId = msg.id && msg.id._serialized ? msg.id._serialized : null;
 
-    // 🧠 Step 1: Extract sender info (number + name)
+    // Extract sender info (number + name)
     let senderNumber = null;
     let senderName = null;
 
@@ -34,7 +31,7 @@ class WhatsAppService {
       senderName = msg._data?.notifyName || senderNumber;
     }
 
-    // 🧠 Step 2: AI processing (extract logistics info)
+    // AI processing (extract logistics info)
     let aiExtracted = [];
     try {
       aiExtracted = await analyzeMessage(msg.body);
@@ -42,48 +39,33 @@ class WhatsAppService {
       console.error('AI processing failed:', err);
     }
 
-    // 🧠 Step 3: Create message document with updated model structure
+    // Create message document with updated model structure
     const dbDoc = new Message({
-      // Source type
       type: "whatsapp",
-      
-      // Common fields
       senderName,
-      company: null, // Will be extracted later if needed
+      company: null,
       originalContent: msg.body,
-      
-      // WhatsApp specific fields
       messageId,
       groupId: chat.id._serialized,
       groupName: chat.name,
       senderNumber,
-      
-      // Email specific fields (null for WhatsApp)
       emailId: null,
       senderEmail: null,
-      
-      // AI extracted data with new field structure
       aiExtracted: aiExtracted.map(item => ({
         loading_country: item.LoadingCountry,
         loading_city: item.LoadingCity,
         loading_postcode: item.LoadingPostcode,
-        loading_lat: null, // Will be populated later if geocoding is added
+        loading_lat: null,
         loading_lng: null,
-        
         delivery_country: item.DeliveryCountry,
         delivery_city: item.DeliveryCity,
         delivery_postcode: item.DeliveryPostcode,
         delivery_lat: null,
         delivery_lng: null,
-        
         price: item.Price ? parseFloat(item.Price.replace(/[^\d.,]/g, '').replace(',', '.')) : null,
         comments: item.Comments
       })),
-      
-      // Set expiration date (24 hours from now)
       expirationDate: new Date(Date.now() + 24 * 60 * 60 * 1000),
-      
-      // System fields
       status: "new",
       isDeleted: false,
       created_at: new Date(msg.timestamp * 1000),
@@ -92,7 +74,7 @@ class WhatsAppService {
 
     const saved = await dbDoc.save();
 
-    // 🧠 Step 4: Cache message for revoke tracking
+    // Cache message for revoke tracking
     if (messageId) {
       this.msgCache.set(messageId, saved._id.toString());
       if (this.msgCache.size > this.maxCacheSize) {
@@ -101,7 +83,7 @@ class WhatsAppService {
       }
     }
 
-    // 🧠 Step 5: Emit message + AI result to frontend with updated structure
+    // Emit message + AI result to frontend
     io.emit('newMessage', {
       _id: saved._id,
       type: saved.type,
@@ -110,12 +92,78 @@ class WhatsAppService {
       senderNumber,
       senderName,
       originalContent: msg.body,
-      aiExtracted: saved.aiExtracted, // Send processed AI data
+      aiExtracted: saved.aiExtracted,
       created_at: saved.created_at,
       status: saved.status
     });
 
     return saved;
+  }
+
+  // 🆕 NEW: Method to send automated response messages
+  async sendMessage(to, message) {
+    try {
+      if (!this.isReady) {
+        console.error('WhatsApp client is not ready');
+        return false;
+      }
+
+      // Format phone number for WhatsApp
+      let formattedNumber = to.replace(/[^\d]/g, ''); // Remove non-digits
+      if (!formattedNumber.includes('@')) {
+        formattedNumber = formattedNumber + '@c.us';
+      }
+
+      // Send message
+      await this.client.sendMessage(formattedNumber, message);
+      console.log(`✅ WhatsApp message sent to ${to}`);
+      return true;
+
+    } catch (error) {
+      console.error('Error sending WhatsApp message:', error);
+      return false;
+    }
+  }
+
+  // 🆕 NEW: Method to send message to group
+  async sendGroupMessage(groupId, message) {
+    try {
+      if (!this.isReady) {
+        console.error('WhatsApp client is not ready');
+        return false;
+      }
+
+      await this.client.sendMessage(groupId, message);
+      console.log(`✅ WhatsApp group message sent to ${groupId}`);
+      return true;
+
+    } catch (error) {
+      console.error('Error sending WhatsApp group message:', error);
+      return false;
+    }
+  }
+
+  // 🆕 NEW: Method to get contact info
+  async getContactInfo(phoneNumber) {
+    try {
+      if (!this.isReady) return null;
+
+      let formattedNumber = phoneNumber.replace(/[^\d]/g, '');
+      if (!formattedNumber.includes('@')) {
+        formattedNumber = formattedNumber + '@c.us';
+      }
+
+      const contact = await this.client.getContactById(formattedNumber);
+      return {
+        name: contact.name || contact.pushname || phoneNumber,
+        number: contact.number || phoneNumber,
+        isRegistered: contact.isWAContact
+      };
+
+    } catch (error) {
+      console.error('Error getting contact info:', error);
+      return null;
+    }
   }
 
   initialize(io) {
@@ -138,11 +186,9 @@ class WhatsAppService {
       io.emit("ready", { message: "WhatsApp connected successfully!" });
     });
 
-    // Incoming messages
     this.client.on("message", async (msg) => {
       try {
         const chat = await msg.getChat();
-
         if (!chat.isGroup) return;
 
         const trackedGroup = await TrackedGroup.findOne({
@@ -159,10 +205,8 @@ class WhatsAppService {
       }
     });
 
-    // Handle revoke/delete for everyone
     this.client.on("message_revoke_everyone", async (after, before) => {
       try {
-        // Determine messageId: try 'before' first (contains original), else try 'after'
         let messageId = null;
         let deletedBy = null;
 
@@ -172,16 +216,10 @@ class WhatsAppService {
         } else if (after && after.id && after.id._serialized) {
           messageId = after.id._serialized;
           deletedBy = after.author || after.participant || null;
-        } else if (after && after.key && after.key.id) {
-          messageId = after.key.id;
         }
 
-        if (!messageId) {
-          console.warn("Revoke event without messageId:", { after, before });
-          return;
-        }
+        if (!messageId) return;
 
-        // Try cache first
         let savedDocId = this.msgCache.get(messageId);
         let msgDoc = null;
         
@@ -194,12 +232,11 @@ class WhatsAppService {
         if (msgDoc) {
           msgDoc.isDeleted = true;
           msgDoc.deletedAt = new Date();
-          msgDoc.deleted_at = new Date(); // Updated field name
+          msgDoc.deleted_at = new Date();
           if (deletedBy) msgDoc.deletedBy = deletedBy;
           
           await msgDoc.save();
 
-          // notify frontend to update UI
           io.emit("messageDeleted", {
             _id: msgDoc._id,
             messageId,

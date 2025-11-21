@@ -10,5 +10,6 @@ router.get('/dashboard', adminController.dashboard);
 
 // API routes
 router.get('/api/messages', adminController.getMessages);
+router.get('/api/export-excel', adminController.exportExcel); // 🆕 NEW: Excel Export endpoint
 
 module.exports = router;

@@ -1,25 +1,78 @@
 // models/Message.js
-const mongoose = require('mongoose');
+const mongoose = require("mongoose");
 
 const MessageSchema = new mongoose.Schema({
-  messageId: { type: String, index: true, unique: false }, // WhatsApp message id
+
+  // ---------------------------------------------------------
+  // SOURCE TYPE
+  // ---------------------------------------------------------
+  type: {
+    type: String,
+    enum: ["whatsapp", "email"],
+    // required: true
+  },
+
+  // ---------------------------------------------------------
+  // COMMON FIELDS (for BOTH WhatsApp & Email)
+  // ---------------------------------------------------------
+  senderName: String,
+  company: String,
+  originalContent: String,    // raw WhatsApp or raw email content
+
+  // ---------------------------------------------------------
+  // WHATSAPP SPECIFIC
+  // ---------------------------------------------------------
+  messageId: { type: String, index: true },
   groupId: String,
   groupName: String,
-  senderName: String, // ✅ new field
   senderNumber: String,
-  messageContent: String,       // current content (can remain or be blanked)
-  originalContent: String,      // keep original text if you want to preserve it
-  hasMedia: { type: Boolean, default: false },
-  mediaPath: String,
-  date: { type: Date, default: Date.now },
 
-  // AI Extraction Result
-  aiExtracted: { type: Array, default: [] }, // 👈 stores structured AI results
-  expirationDate: Date,  // <-- new field
-  // deletion tracking
+  // ---------------------------------------------------------
+  // EMAIL SPECIFIC
+  // ---------------------------------------------------------
+  emailId: { type: String, index: true },
+  senderEmail: String,
+
+  // ---------------------------------------------------------
+  // AI EXTRACTED MULTIPLE RECORDS (ARRAY)
+  // ---------------------------------------------------------
+  aiExtracted: [
+    {
+      loading_country: String,
+      loading_city: String,
+      loading_postcode: String,
+      loading_lat: Number,
+      loading_lng: Number,
+
+      delivery_country: String,
+      delivery_city: String,
+      delivery_postcode: String,
+      delivery_lat: Number,
+      delivery_lng: Number,
+
+      price: Number,
+      comments: String
+    }
+  ],
+
+  // ---------------------------------------------------------
+  // EXPIRATION
+  // ---------------------------------------------------------
+  expirationDate: Date,
+
+  // ---------------------------------------------------------
+  // SYSTEM
+  // ---------------------------------------------------------
+  status: { type: String, default: "new" },
+
   isDeleted: { type: Boolean, default: false },
   deletedAt: { type: Date, default: null },
-  deletedBy: { type: String, default: null } // who issued deletion (if available)
+  deletedBy: { type: String, default: null },
+
+  created_at: { type: Date, default: Date.now },
+  updated_at: { type: Date, default: Date.now },
+  deleted_at: { type: Date, default: null }
+
 });
 
-module.exports = mongoose.model('Message', MessageSchema);
+module.exports = mongoose.model("Message", MessageSchema);

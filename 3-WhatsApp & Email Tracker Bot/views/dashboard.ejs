@@ -34,7 +34,7 @@
       background: rgba(255,255,255,0.3);
     }
     .container {
-      max-width: 1200px;
+      max-width: 1400px;
       margin: 20px auto;
       padding: 0 20px;
     }
@@ -60,61 +60,139 @@
       font-weight: bold;
       color: #25D366;
     }
-    .messages-container {
+    .table-container {
       background: white;
       padding: 20px;
       border-radius: 8px;
       box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+      margin-bottom: 30px;
     }
-    .messages-container h2 {
-      margin-bottom: 20px;
-      color: #333;
-    }
-    .message-item {
-      padding: 15px;
-      border-bottom: 1px solid #eee;
-      animation: fadeIn 0.3s;
-    }
-    .message-item:last-child {
-      border-bottom: none;
-    }
-    .message-header {
+    .table-header {
       display: flex;
       justify-content: space-between;
-      margin-bottom: 8px;
+      align-items: center;
+      margin-bottom: 20px;
+      flex-wrap: wrap;
+      gap: 15px;
     }
-    .group-name {
-      font-weight: bold;
-      color: #25D366;
-    }
-    .message-time {
-      color: #999;
-      font-size: 12px;
-    }
-    .sender-number {
-      color: #666;
-      font-size: 14px;
-      margin-bottom: 5px;
-    }
-    .message-content {
+    .table-header h2 {
       color: #333;
-      line-height: 1.5;
+      margin: 0;
     }
-    .no-messages {
+    .btn-export {
+      background: #4CAF50;
+      color: white;
+      padding: 10px 20px;
+      border: none;
+      border-radius: 5px;
+      font-size: 14px;
+      cursor: pointer;
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      transition: background 0.3s;
+    }
+    .btn-export:hover {
+      background: #45a049;
+    }
+    .btn-export:disabled {
+      background: #cccccc;
+      cursor: not-allowed;
+    }
+    .table-wrapper {
+      overflow-x: auto;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 10px;
+    }
+    thead {
+      background: #f5f5f5;
+      border-bottom: 2px solid #25D366;
+      position: sticky;
+      top: 0;
+    }
+    th {
+      padding: 12px;
+      text-align: left;
+      font-weight: bold;
+      color: #333;
+      font-size: 13px;
+    }
+    td {
+      padding: 12px;
+      border-bottom: 1px solid #eee;
+      font-size: 13px;
+    }
+    tbody tr:hover {
+      background: #f9f9f9;
+    }
+    tbody tr.new-row {
+      background: #e8f5e9;
+    }
+    .tag-sold {
+      background: #d32f2f;
+      color: white;
+      padding: 4px 10px;
+      border-radius: 3px;
+      font-size: 12px;
+      font-weight: bold;
+    }
+    .tag-available {
+      background: #4CAF50;
+      color: white;
+      padding: 4px 10px;
+      border-radius: 3px;
+      font-size: 12px;
+      font-weight: bold;
+    }
+    .price-tag {
+      background: #2196F3;
+      color: white;
+      padding: 4px 10px;
+      border-radius: 3px;
+      font-weight: bold;
+    }
+    .no-data {
       text-align: center;
       padding: 40px;
       color: #999;
     }
-    .new-message {
-      background: #e8f5e9 !important;
+    .location-text {
+      color: #666;
+      line-height: 1.4;
     }
-    .deleted-message {
-      color: #d32f2f;
-      font-style: italic;
+    .sender-info {
+      font-weight: 500;
+      color: #333;
     }
     @keyframes fadeIn {
       from { opacity: 0; transform: translateY(-10px); }
       to { opacity: 1; transform: translateY(0); }
+    }
+    .new-row {
+      animation: fadeIn 0.3s;
+    }
+    .toast {
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
+      background: #4CAF50;
+      color: white;
+      padding: 15px 20px;
+      border-radius: 5px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+      z-index: 1000;
+      animation: slideIn 0.3s;
+    }
+    .toast.error {
+      background: #d32f2f;
+    }
+    @keyframes slideIn {
+      from { transform: translateX(400px); }
+      to { transform: translateX(0); }
     }
   </style>
 </head>
@@ -137,35 +215,39 @@
         <h3>TOTAL MESSAGES</h3>
         <div class="number" id="totalMessages"><%= messages.length %></div>
       </div>
+      <div class="stat-card">
+        <h3>AI PROCESSED SHIPMENTS (24H)</h3>
+        <div class="number" id="totalShipments">0</div>
+      </div>
     </div>
 
-    <div class="messages-container">
-      <h2>Recent Messages</h2>
-      <div id="messagesList">
-        <% if (messages.length > 0) { %>
-          <% messages.forEach(msg => { %>
-            <div class="message-item" id="msg-<%= msg._id %>">
-              <div class="message-header">
-                <span class="group-name"><%= msg.groupName %></span>
-                <span class="message-time">
-                  <%= new Date(msg.date).toLocaleString() %>
-                </span>
-              </div>
-              <div class="sender-number">From: <%= msg.senderNumber %></div>
-              <div class="message-content <%= msg.isDeleted ? 'deleted-message' : '' %>">
-                <% if (msg.isDeleted) { %>
-                  Message deleted
-                <% } else { %>
-                  <%= msg.messageContent %>
-                <% } %>
-              </div>
-            </div>
-          <% }) %>
-        <% } else { %>
-          <div class="no-messages">
-            No messages yet. Waiting for messages from tracked groups...
-          </div>
-        <% } %>
+    <div class="table-container">
+      <div class="table-header">
+        <h2>📦 AI Extracted Shipment Data (Last 24 Hours)</h2>
+        <button class="btn-export" id="exportBtn" onclick="exportToExcel()" title="Download Excel file with last 24 hours of data">
+          📥 Download Excel
+        </button>
+      </div>
+      <div class="table-wrapper">
+        <table id="shipmentsTable">
+          <thead>
+            <tr>
+              <th>Group</th>
+              <th>Sender</th>
+              <th>Loading Location</th>
+              <th>Delivery Location</th>
+              <th>Price</th>
+              <th>Comments</th>
+              <th>Status</th>
+              <th>Date & Time</th>
+            </tr>
+          </thead>
+          <tbody id="shipmentsBody">
+            <tr>
+              <td colspan="8" class="no-data">No shipment data yet. Waiting for messages...</td>
+            </tr>
+          </tbody>
+        </table>
       </div>
     </div>
   </div>
@@ -173,66 +255,167 @@
   <script src="/socket.io/socket.io.js"></script>
   <script>
     const socket = io();
-    
+    let allShipments = [];
+
+    // Load initial data from page
+    function loadInitialData() {
+      const messages = JSON.parse('<%- JSON.stringify(messages).replace(/\\/g, '\\\\').replace(/'/g, "\\'") %>');
+    processMessages(messages);
+    }
+
+    function processMessages(messages) {
+      allShipments = [];
+      
+      messages.forEach(msg => {
+        if (msg.aiExtracted && Array.isArray(msg.aiExtracted) && msg.aiExtracted.length > 0) {
+          msg.aiExtracted.forEach(shipment => {
+            allShipments.push({
+              ...shipment,
+              groupName: msg.groupName,
+              senderNumber: msg.senderNumber,
+              senderName: msg.senderName || msg.senderNumber,
+              date: msg.date,
+              messageId: msg._id
+            });
+          });
+        }
+      });
+
+      updateTable();
+    }
+
+    function updateTable() {
+      const tbody = document.getElementById('shipmentsBody');
+      
+      if (allShipments.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="8" class="no-data">No shipment data yet. Waiting for messages...</td></tr>`;
+        document.getElementById('totalShipments').textContent = '0';
+        return;
+      }
+
+      tbody.innerHTML = allShipments.map((shipment, index) => {
+        const loading = formatLocation(shipment.LoadingCity, shipment.LoadingCountry);
+        const delivery = formatLocation(shipment.DeliveryCity, shipment.DeliveryCountry);
+        const price = shipment.Price || '-';
+        const comments = shipment.Comments || '-';
+        const status = shipment.Sold ? '<span class="tag-sold">SOLD</span>' : '<span class="tag-available">AVAILABLE</span>';
+        const dateStr = new Date(shipment.date).toLocaleString();
+
+        return `
+          <tr class="new-row">
+            <td><strong>${escapeHtml(shipment.groupName)}</strong></td>
+            <td><span class="sender-info">${escapeHtml(shipment.senderName)}</span></td>
+            <td><div class="location-text">${escapeHtml(loading)}</div></td>
+            <td><div class="location-text">${escapeHtml(delivery)}</div></td>
+            <td>${price !== '-' ? `<span class="price-tag">${escapeHtml(price)}</span>` : price}</td>
+            <td>${escapeHtml(comments)}</td>
+            <td>${status}</td>
+            <td>${dateStr}</td>
+          </tr>
+        `;
+      }).join('');
+
+      document.getElementById('totalShipments').textContent = allShipments.length;
+    }
+
+    function formatLocation(city, country) {
+      if (city && country) return `${city}, ${country}`;
+      if (city) return city;
+      if (country) return country;
+      return 'Unknown';
+    }
+
+    function escapeHtml(text) {
+      if (!text) return '';
+      const map = {
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#039;'
+      };
+      return text.replace(/[&<>"']/g, m => map[m]);
+    }
+
+    function showToast(message, isError = false) {
+      const toast = document.createElement('div');
+      toast.className = `toast ${isError ? 'error' : ''}`;
+      toast.textContent = message;
+      document.body.appendChild(toast);
+      setTimeout(() => toast.remove(), 3000);
+    }
+
+    async function exportToExcel() {
+      if (allShipments.length === 0) {
+        showToast('No data to export', true);
+        return;
+      }
+
+      try {
+        const btn = document.getElementById('exportBtn');
+        btn.disabled = true;
+        btn.textContent = '⏳ Generating...';
+
+        const response = await fetch('/api/export-excel');
+        
+        if (!response.ok) {
+          throw new Error('Export failed');
+        }
+
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `shipments_${new Date().toISOString().split('T')[0]}.xlsx`;
+        document.body.appendChild(a);
+        a.click();
+        window.URL.revokeObjectURL(url);
+        a.remove();
+
+        showToast('✅ Excel file downloaded successfully!');
+      } catch (error) {
+        console.error('Export error:', error);
+        showToast('❌ Failed to export Excel file', true);
+      } finally {
+        const btn = document.getElementById('exportBtn');
+        btn.disabled = false;
+        btn.textContent = '📥 Download Excel';
+      }
+    }
+
     // 🟢 When new message arrives
     socket.on('newMessage', (message) => {
-      const messagesList = document.getElementById('messagesList');
-      const noMessages = messagesList.querySelector('.no-messages');
-      if (noMessages) noMessages.remove();
-
-      const messageItem = document.createElement('div');
-      messageItem.className = 'message-item new-message';
-      messageItem.id = 'msg-' + message._id;
-
-      messageItem.innerHTML = `
-        <div class="message-header">
-          <span class="group-name">${message.groupName}</span>
-          <span class="message-time">${new Date(message.date).toLocaleString()}</span>
-        </div>
-        <div class="sender-number">From: ${message.senderNumber}</div>
-        <div class="message-content">${message.messageContent}</div>
-      `;
-
-      messagesList.insertBefore(messageItem, messagesList.firstChild);
-
-      const totalMessages = document.getElementById('totalMessages');
-      totalMessages.textContent = parseInt(totalMessages.textContent) + 1;
-
-      setTimeout(() => {
-        messageItem.classList.remove('new-message');
-      }, 2000);
+      if (message.aiExtracted && Array.isArray(message.aiExtracted) && message.aiExtracted.length > 0) {
+        message.aiExtracted.forEach(shipment => {
+          allShipments.unshift({
+            ...shipment,
+            groupName: message.groupName,
+            senderNumber: message.senderNumber,
+            senderName: message.senderName || message.senderNumber,
+            date: message.date,
+            messageId: message._id
+          });
+        });
+        updateTable();
+        document.getElementById('totalMessages').textContent = parseInt(document.getElementById('totalMessages').textContent) + 1;
+      }
     });
 
     // 🔴 When a message is deleted
     socket.on('messageDeleted', (payload) => {
-      const msgDiv = document.getElementById('msg-' + payload._id);
-      if (msgDiv) {
-        const contentDiv = msgDiv.querySelector('.message-content');
-        if (contentDiv) {
-          contentDiv.textContent = 'Message deleted';
-          contentDiv.classList.add('deleted-message');
-        }
-      } else {
-        console.log('Deleted message not found in DOM:', payload);
-      }
+      allShipments = allShipments.filter(s => s.messageId !== payload._id);
+      updateTable();
     });
 
     // 🕒 When messages auto-delete via cron
     socket.on('messageDeletedBatch', (data) => {
       console.log(`${data.deletedCount} messages auto-deleted`);
-
-      data.messageIds.forEach(id => {
-        const msgDiv = document.getElementById('msg-' + id);
-        if (msgDiv) {
-          const contentDiv = msgDiv.querySelector('.message-content');
-          if (contentDiv) {
-            contentDiv.textContent = 'Message deleted automatically';
-            contentDiv.classList.add('deleted-message');
-          }
-        }
-      });
+      allShipments = allShipments.filter(s => !data.messageIds.includes(s.messageId));
+      updateTable();
     });
 
+    // Load initial data on page load
+    window.addEventListener('load', loadInitialData);
   </script>
 </body>
 </html>

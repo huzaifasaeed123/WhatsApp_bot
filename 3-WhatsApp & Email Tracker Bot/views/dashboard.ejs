@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Enhanced Dashboard - WhatsApp & Email Tracker Bot</title>
+  <title>Dashboard - WhatsApp & Email Tracker Bot</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
@@ -295,6 +295,12 @@
       font-size: 12px;
     }
     
+    .btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+      transform: none !important;
+    }
+    
     /* Table */
     .table-container {
       overflow-x: auto;
@@ -360,11 +366,6 @@
     .tag-deleted {
       background: #fecaca;
       color: #991b1b;
-    }
-    
-    .tag-sold {
-      background: #fed7d7;
-      color: #c53030;
     }
     
     .price-tag {
@@ -574,8 +575,8 @@
 </head>
 <body>
   <div class="header">
-    <h1>📊 Enhanced Analytics Dashboard</h1>
-    <p class="subtitle">Comprehensive logistics data management with automated responses</p>
+    <h1>📊 Logistics Dashboard</h1>
+    <p class="subtitle">Individual shipment response management</p>
     <div class="nav">
       <a href="/dashboard">📊 Dashboard</a>
       <a href="/groups">👥 Manage Groups</a>
@@ -642,7 +643,7 @@
       <div class="toolbar">
         <div class="toolbar-header">
           <div class="toolbar-title">
-            📦 Logistics Offers Management
+            📦 Individual Shipment Management
           </div>
           <div class="toolbar-actions">
             <button class="btn btn-secondary btn-sm" onclick="refreshData()">
@@ -862,13 +863,14 @@
             const price = shipment.price ? `€${shipment.price}` : '-';
             
             rows.push(`
-              <tr data-message-id="${msg._id}">
+              <tr data-message-id="${msg._id}" data-shipment-index="${index}">
                 <td><span class="tag tag-${msg.type}">${msg.type}</span></td>
                 <td><span class="tag tag-${msg.isDeleted ? 'deleted' : 'active'}">${msg.isDeleted ? 'Deleted' : 'Active'}</span></td>
                 <td><strong>${escapeHtml(msg.groupName || 'Email')}</strong></td>
                 <td>
                   <div style="font-weight: 500;">${escapeHtml(msg.senderName || 'Unknown')}</div>
                   <div style="font-size: 12px; color: #64748b;">${escapeHtml(msg.senderEmail || msg.senderNumber || '')}</div>
+                  ${msg.company ? `<div style="font-size: 11px; color: #64748b;">Company: ${escapeHtml(msg.company)}</div>` : ''}
                 </td>
                 <td>
                   <div style="font-size: 13px; line-height: 1.4;">${escapeHtml(route)}</div>
@@ -888,7 +890,11 @@
                 </td>
                 <td>
                   ${!msg.isDeleted ? `
-                    <button class="btn btn-primary btn-sm" onclick="sendResponse('${msg._id}', '${msg.type}')">
+                    <button 
+                      class="btn btn-primary btn-sm" 
+                      onclick="sendResponse('${msg._id}', ${index}, '${msg.type}')"
+                      title="Send response to this specific shipment"
+                    >
                       📤 Respond
                     </button>
                   ` : '-'}
@@ -961,9 +967,16 @@
       loadData();
     }
 
-    async function sendResponse(messageId, messageType) {
+    // ✅ SIMPLIFIED: Send response to specific shipment only (NO tracking)
+    async function sendResponse(messageId, shipmentIndex, messageType) {
       try {
-        const template = templates[messageType] || `Thank you for your logistics offer. We would like to reserve this shipment. Please confirm availability.`;
+        // Get button element to show loading state
+        const button = event.target;
+        const originalText = button.textContent;
+        button.disabled = true;
+        button.textContent = '⏳ Sending...';
+        
+        const template = templates[messageType] || `Thank you for your logistics offer. We would like to reserve this specific shipment. Please confirm availability.`;
         
         const response = await fetch('/api/send-response', {
           method: 'POST',
@@ -972,6 +985,7 @@
           },
           body: JSON.stringify({
             messageId,
+            shipmentIndex: parseInt(shipmentIndex), // ✅ Pass specific shipment index
             template
           })
         });
@@ -979,13 +993,22 @@
         const result = await response.json();
         
         if (result.success) {
-          showToast(`✅ Response sent successfully to ${result.sentTo}`, 'success');
+          showToast(`✅ Response sent to ${result.sentTo} for: ${result.shipmentDetails?.route || 'Unknown route'}`, 'success');
         } else {
           showToast(`❌ Failed to send response: ${result.message}`, 'error');
         }
+        
+        // Reset button
+        button.disabled = false;
+        button.textContent = originalText;
+        
       } catch (error) {
         console.error('Error sending response:', error);
         showToast('❌ Error sending response', 'error');
+        
+        // Reset button
+        button.disabled = false;
+        button.textContent = originalText;
       }
     }
 

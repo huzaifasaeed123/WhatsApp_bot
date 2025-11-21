@@ -215,10 +215,18 @@ exports.getMessages = async (req, res) => {
   }
 };
 
-// API endpoint to send automated response
+// ✅ SIMPLIFIED: Send response to SPECIFIC shipment only (NO database tracking)
 exports.sendAutomatedResponse = async (req, res) => {
   try {
-    const { messageId, template } = req.body;
+    const { messageId, shipmentIndex, template } = req.body;
+    
+    // Validate shipmentIndex is provided
+    if (shipmentIndex === undefined || shipmentIndex === null) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Shipment index is required to respond to specific offer' 
+      });
+    }
     
     // Get the original message
     const originalMessage = await Message.findById(messageId);
@@ -226,50 +234,72 @@ exports.sendAutomatedResponse = async (req, res) => {
       return res.status(404).json({ success: false, error: 'Message not found' });
     }
 
-    // Build response message with offer details
-    let responseText = template || "Thank you for your logistics offer. We would like to reserve the following:";
-    
-    if (originalMessage.aiExtracted && originalMessage.aiExtracted.length > 0) {
-      responseText += "\n\n📦 OFFER DETAILS:\n";
-      
-      originalMessage.aiExtracted.forEach((shipment, index) => {
-        responseText += `\n${index + 1}. `;
-        if (shipment.loading_city || shipment.loading_country) {
-          responseText += `From: ${shipment.loading_city || ''} ${shipment.loading_country || ''}`;
-          if (shipment.loading_postcode) responseText += ` (${shipment.loading_postcode})`;
-        }
-        if (shipment.delivery_city || shipment.delivery_country) {
-          responseText += ` → To: ${shipment.delivery_city || ''} ${shipment.delivery_country || ''}`;
-          if (shipment.delivery_postcode) responseText += ` (${shipment.delivery_postcode})`;
-        }
-        if (shipment.price) {
-          responseText += `\n   💰 Price: €${shipment.price}`;
-        }
-        if (shipment.comments) {
-          responseText += `\n   📝 ${shipment.comments}`;
-        }
-        responseText += "\n";
+    // Validate shipment index exists
+    if (!originalMessage.aiExtracted || 
+        shipmentIndex < 0 || 
+        shipmentIndex >= originalMessage.aiExtracted.length) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Invalid shipment index' 
       });
-      
-      responseText += "\nPlease confirm availability and provide further details.";
     }
+
+    // Get the SPECIFIC shipment we're responding to
+    const specificShipment = originalMessage.aiExtracted[shipmentIndex];
+
+    // Build response message for ONLY the specific offer
+    let responseText = template || "Thank you for your logistics offer. We would like to reserve the following shipment:";
+    
+    responseText += "\n\n📦 RESERVED SHIPMENT:\n";
+    
+    // Add details for ONLY the selected shipment
+    if (specificShipment.loading_city || specificShipment.loading_country) {
+      responseText += `📍 FROM: ${specificShipment.loading_city || ''} ${specificShipment.loading_country || ''}`;
+      if (specificShipment.loading_postcode) {
+        responseText += ` (${specificShipment.loading_postcode})`;
+      }
+      responseText += "\n";
+    }
+    
+    if (specificShipment.delivery_city || specificShipment.delivery_country) {
+      responseText += `📍 TO: ${specificShipment.delivery_city || ''} ${specificShipment.delivery_country || ''}`;
+      if (specificShipment.delivery_postcode) {
+        responseText += ` (${specificShipment.delivery_postcode})`;
+      }
+      responseText += "\n";
+    }
+    
+    if (specificShipment.price) {
+      responseText += `💰 PRICE: €${specificShipment.price}\n`;
+    }
+    
+    if (specificShipment.comments) {
+      responseText += `📝 DETAILS: ${specificShipment.comments}\n`;
+    }
+    
+    // responseText += "\n✅ Please confirm availability and provide pickup/delivery schedule.";
+    // responseText += "\n\n📞 We will contact you shortly to finalize the details.";
 
     let success = false;
     let response = '';
+    let sentTo = '';
 
     // Send via appropriate channel
     if (originalMessage.type === 'whatsapp' && originalMessage.senderNumber) {
       try {
         success = await whatsappService.sendMessage(originalMessage.senderNumber, responseText);
         response = success ? 'WhatsApp message sent successfully' : 'Failed to send WhatsApp message';
+        sentTo = originalMessage.senderNumber;
       } catch (error) {
         console.error('WhatsApp send error:', error);
         response = 'WhatsApp service unavailable';
       }
     } else if (originalMessage.type === 'email' && originalMessage.senderEmail) {
       try {
-        success = await emailService.sendEmail(originalMessage.senderEmail, 'RE: Your Logistics Offer', responseText);
+        const emailSubject = `RE: Shipment Reservation - ${specificShipment.loading_city || 'Location'} to ${specificShipment.delivery_city || 'Destination'}`;
+        success = await emailService.sendEmail(originalMessage.senderEmail, emailSubject, responseText);
         response = success ? 'Email sent successfully' : 'Failed to send email';
+        sentTo = originalMessage.senderEmail;
       } catch (error) {
         console.error('Email send error:', error);
         response = 'Email service unavailable';
@@ -278,10 +308,20 @@ exports.sendAutomatedResponse = async (req, res) => {
       response = 'Invalid message type or missing contact information';
     }
 
+    // ✅ NO DATABASE TRACKING - Just log success
+    if (success) {
+      console.log(`✅ Response sent to ${sentTo} for shipment ${shipmentIndex} from message ${messageId}`);
+    }
+
     res.json({
       success,
       message: response,
-      sentTo: originalMessage.type === 'whatsapp' ? originalMessage.senderNumber : originalMessage.senderEmail
+      sentTo,
+      shipmentDetails: {
+        index: shipmentIndex,
+        route: `${specificShipment.loading_city || '?'} → ${specificShipment.delivery_city || '?'}`,
+        price: specificShipment.price || 'N/A'
+      }
     });
 
   } catch (error) {
@@ -295,8 +335,8 @@ exports.getResponseTemplates = async (req, res) => {
   try {
     // For now, return default templates. In production, store in database
     const templates = {
-      whatsapp: process.env.WHATSAPP_TEMPLATE || "Thank you for your logistics offer. We would like to reserve this shipment. Please confirm availability.",
-      email: process.env.EMAIL_TEMPLATE || "Thank you for your logistics offer. We are interested in reserving this shipment. Please provide further details and confirm availability."
+      whatsapp: process.env.WHATSAPP_TEMPLATE || "Thank you for your logistics offer. We would like to reserve this specific shipment. Please confirm availability.",
+      email: process.env.EMAIL_TEMPLATE || "Thank you for your logistics offer. We are interested in reserving the specific shipment mentioned below. Please provide further details and confirm availability."
     };
 
     res.json({ success: true, templates });

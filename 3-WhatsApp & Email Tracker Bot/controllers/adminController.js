@@ -76,9 +76,14 @@ exports.dashboard = async (req, res) => {
     }
 
     const trackedGroups = await TrackedGroup.find({ isActive: true });
-    const messages = await Message.find()
-      .sort({ date: -1 })
-      .limit(50);
+    
+    // Updated query to use new field structure
+    const messages = await Message.find({
+      isDeleted: false,
+      type: { $in: ["whatsapp", "email"] } // Support both types
+    })
+    .sort({ created_at: -1 })
+    .limit(50);
 
     res.render('dashboard', { 
       trackedGroups,
@@ -90,12 +95,15 @@ exports.dashboard = async (req, res) => {
   }
 };
 
-// API endpoint to get messages
+// API endpoint to get messages with updated field structure
 exports.getMessages = async (req, res) => {
   try {
-    const messages = await Message.find()
-      .sort({ date: -1 })
-      .limit(50);
+    const messages = await Message.find({
+      isDeleted: false,
+      type: { $in: ["whatsapp", "email"] }
+    })
+    .sort({ created_at: -1 })
+    .limit(50);
     
     res.json({ success: true, messages });
   } catch (error) {
@@ -103,36 +111,42 @@ exports.getMessages = async (req, res) => {
   }
 };
 
-// 🆕 API endpoint to export Excel with last 24 hours data
+// 🆕 API endpoint to export Excel with updated database structure
 exports.exportExcel = async (req, res) => {
   try {
     // Calculate date 24 hours ago
     const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
 
-    // Get messages from last 24 hours with AI extracted data
+    // Get messages from last 24 hours with AI extracted data using updated field structure
     const messages = await Message.find({
-      date: { $gte: twentyFourHoursAgo },
-      aiExtracted: { $exists: true, $ne: [] }
+      created_at: { $gte: twentyFourHoursAgo },
+      aiExtracted: { $exists: true, $ne: [] },
+      isDeleted: false,
+      type: { $in: ["whatsapp", "email"] }
     })
-    .sort({ date: -1 });
+    .sort({ created_at: -1 });
 
-    // Flatten AI extracted shipments with message context
+    // Flatten AI extracted shipments with message context using new field structure
     const shipments = [];
     messages.forEach(msg => {
       if (msg.aiExtracted && Array.isArray(msg.aiExtracted) && msg.aiExtracted.length > 0) {
         msg.aiExtracted.forEach(shipment => {
           shipments.push({
-            Group: msg.groupName || 'Unknown',
-            Sender: msg.senderName || msg.senderNumber || 'Unknown',
-            'Loading City': shipment.LoadingCity || '-',
-            'Loading Country': shipment.LoadingCountry || '-',
-            'Delivery City': shipment.DeliveryCity || '-',
-            'Delivery Country': shipment.DeliveryCountry || '-',
-            Price: shipment.Price || '-',
-            Comments: shipment.Comments || '-',
-            Status: shipment.Sold ? 'SOLD' : 'AVAILABLE',
-            'Date & Time': new Date(msg.date).toLocaleString(),
-            'Message Date (UTC)': msg.date.toISOString()
+            Type: msg.type || 'unknown',
+            Group: msg.groupName || 'Email', // Group name for WhatsApp, 'Email' for emails
+            Sender: msg.senderName || msg.senderNumber || msg.senderEmail || 'Unknown',
+            Company: msg.company || '-',
+            'Loading City': shipment.loading_city || '-',
+            'Loading Country': shipment.loading_country || '-',
+            'Loading Postcode': shipment.loading_postcode || '-',
+            'Delivery City': shipment.delivery_city || '-',
+            'Delivery Country': shipment.delivery_country || '-',
+            'Delivery Postcode': shipment.delivery_postcode || '-',
+            Price: shipment.price ? `€${shipment.price}` : '-',
+            Comments: shipment.comments || '-',
+            Status: msg.status || 'new',
+            'Date & Time': new Date(msg.created_at).toLocaleString(),
+            'Message Date (UTC)': new Date(msg.created_at).toISOString()
           });
         });
       }
@@ -143,7 +157,7 @@ exports.exportExcel = async (req, res) => {
     const worksheet = workbook.addWorksheet('Shipments');
 
     // Add title row
-    worksheet.mergeCells('A1:J1');
+    worksheet.mergeCells('A1:M1');
     const titleCell = worksheet.getCell('A1');
     titleCell.value = `Shipments Report - Last 24 Hours (${new Date().toLocaleString()})`;
     titleCell.font = { bold: true, size: 14, color: { argb: 'FFFFFFFF' } };
@@ -151,8 +165,11 @@ exports.exportExcel = async (req, res) => {
     titleCell.alignment = { horizontal: 'center', vertical: 'center' };
     worksheet.getRow(1).height = 25;
 
-    // Add headers
-    const headers = ['Group', 'Sender', 'Loading City', 'Loading Country', 'Delivery City', 'Delivery Country', 'Price', 'Comments', 'Status', 'Date & Time'];
+    // Add headers with updated structure
+    const headers = [
+      'Type', 'Group/Source', 'Sender', 'Company', 'Loading City', 'Loading Country', 'Loading Postcode',
+      'Delivery City', 'Delivery Country', 'Delivery Postcode', 'Price', 'Comments', 'Status', 'Date & Time'
+    ];
     const headerRow = worksheet.addRow(headers);
     headerRow.font = { bold: true, color: { argb: 'FFFFFFFF' } };
     headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF333333' } };
@@ -162,20 +179,26 @@ exports.exportExcel = async (req, res) => {
     // Add data rows
     shipments.forEach((shipment, index) => {
       const row = worksheet.addRow([
+        shipment.Type,
         shipment.Group,
         shipment.Sender,
+        shipment.Company,
         shipment['Loading City'],
         shipment['Loading Country'],
+        shipment['Loading Postcode'],
         shipment['Delivery City'],
         shipment['Delivery Country'],
+        shipment['Delivery Postcode'],
         shipment.Price,
         shipment.Comments,
         shipment.Status,
         shipment['Date & Time']
       ]);
 
-      // Color sold rows differently
-      if (shipment.Status === 'SOLD') {
+      // Color different message types differently
+      if (shipment.Type === 'email') {
+        row.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE8F4FD' } };
+      } else if (shipment.Status === 'sold') {
         row.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFE6E6' } };
       }
 
@@ -191,32 +214,41 @@ exports.exportExcel = async (req, res) => {
 
     // Adjust column widths
     worksheet.columns = [
-      { width: 15 },
-      { width: 15 },
-      { width: 15 },
-      { width: 15 },
-      { width: 15 },
-      { width: 15 },
-      { width: 12 },
-      { width: 20 },
-      { width: 12 },
-      { width: 20 }
+      { width: 10 }, // Type
+      { width: 15 }, // Group/Source
+      { width: 15 }, // Sender
+      { width: 15 }, // Company
+      { width: 15 }, // Loading City
+      { width: 15 }, // Loading Country
+      { width: 12 }, // Loading Postcode
+      { width: 15 }, // Delivery City
+      { width: 15 }, // Delivery Country
+      { width: 12 }, // Delivery Postcode
+      { width: 12 }, // Price
+      { width: 20 }, // Comments
+      { width: 10 }, // Status
+      { width: 20 }  // Date & Time
     ];
 
     // Freeze header rows
     worksheet.views = [{ state: 'frozen', ySplit: 2 }];
 
-    // Add summary sheet
+    // Add summary sheet with updated metrics
     const summarySheet = workbook.addWorksheet('Summary');
     summarySheet.mergeCells('A1:B1');
     const summaryTitle = summarySheet.getCell('A1');
     summaryTitle.value = 'Export Summary';
     summaryTitle.font = { bold: true, size: 12 };
 
+    const whatsappCount = shipments.filter(s => s.Type === 'whatsapp').length;
+    const emailCount = shipments.filter(s => s.Type === 'email').length;
+    const newCount = shipments.filter(s => s.Status === 'new').length;
+
     const summaryData = [
       ['Total Shipments', shipments.length],
-      ['Available', shipments.filter(s => s.Status === 'AVAILABLE').length],
-      ['Sold', shipments.filter(s => s.Status === 'SOLD').length],
+      ['WhatsApp Messages', whatsappCount],
+      ['Email Messages', emailCount],
+      ['New Status', newCount],
       ['Export Date', new Date().toLocaleString()],
       ['Period', 'Last 24 Hours']
     ];

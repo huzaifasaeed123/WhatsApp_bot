@@ -1,4 +1,4 @@
-// services/whatsappService.js (changes / additions only)
+// services/whatsappService.js (updated to align with new Message model)
 const { Client, LocalAuth } = require("whatsapp-web.js");
 const qrcode = require("qrcode");
 const Message = require("../models/Message");
@@ -18,70 +18,105 @@ class WhatsAppService {
   }
 
   async saveIncomingMessage(msg, chat, io) {
-  const messageId = msg.id && msg.id._serialized ? msg.id._serialized : null;
+    const messageId = msg.id && msg.id._serialized ? msg.id._serialized : null;
 
-  // 🧠 Step 1: Extract sender info (number + name)
-  let senderNumber = null;
-  let senderName = null;
+    // 🧠 Step 1: Extract sender info (number + name)
+    let senderNumber = null;
+    let senderName = null;
 
-  try {
-    const contact = await msg.getContact();
-    senderNumber = contact.number || msg.author?.replace(/@.*/, '') || msg.from?.replace(/@.*/, '');
-    senderName = contact.pushname || contact.name || msg._data?.notifyName || senderNumber;
-  } catch (err) {
-    console.warn('Error fetching contact info:', err);
-    senderNumber = msg.author?.replace(/@.*/, '') || msg.from?.replace(/@.*/, '');
-    senderName = msg._data?.notifyName || senderNumber;
-  }
-
-  // 🧠 Step 2: AI processing (extract logistics info)
-  let aiExtracted = [];
-  try {
-    aiExtracted = await analyzeMessage(msg.body);
-  } catch (err) {
-    console.error('AI processing failed:', err);
-  }
-
-  // 🧠 Step 3: Create message document with AI result included
-  // console.log(aiExtracted)
-  const dbDoc = new Message({
-    messageId,
-    groupName: chat.name,
-    groupId: chat.id._serialized,
-    senderNumber,
-    senderName,
-    messageContent: msg.body,
-    originalContent: msg.body,
-    hasMedia: !!msg.hasMedia,
-    date: new Date(msg.timestamp * 1000),
-    aiExtracted: aiExtracted // ✅ AI results stored directly in DB
-  });
-
-  const saved = await dbDoc.save();
-
-  // 🧠 Step 4: Cache message for revoke tracking
-  if (messageId) {
-    this.msgCache.set(messageId, saved._id.toString());
-    if (this.msgCache.size > this.maxCacheSize) {
-      const firstKey = this.msgCache.keys().next().value;
-      this.msgCache.delete(firstKey);
+    try {
+      const contact = await msg.getContact();
+      senderNumber = contact.number || msg.author?.replace(/@.*/, '') || msg.from?.replace(/@.*/, '');
+      senderName = contact.pushname || contact.name || msg._data?.notifyName || senderNumber;
+    } catch (err) {
+      console.warn('Error fetching contact info:', err);
+      senderNumber = msg.author?.replace(/@.*/, '') || msg.from?.replace(/@.*/, '');
+      senderName = msg._data?.notifyName || senderNumber;
     }
+
+    // 🧠 Step 2: AI processing (extract logistics info)
+    let aiExtracted = [];
+    try {
+      aiExtracted = await analyzeMessage(msg.body);
+    } catch (err) {
+      console.error('AI processing failed:', err);
+    }
+
+    // 🧠 Step 3: Create message document with updated model structure
+    const dbDoc = new Message({
+      // Source type
+      type: "whatsapp",
+      
+      // Common fields
+      senderName,
+      company: null, // Will be extracted later if needed
+      originalContent: msg.body,
+      
+      // WhatsApp specific fields
+      messageId,
+      groupId: chat.id._serialized,
+      groupName: chat.name,
+      senderNumber,
+      
+      // Email specific fields (null for WhatsApp)
+      emailId: null,
+      senderEmail: null,
+      
+      // AI extracted data with new field structure
+      aiExtracted: aiExtracted.map(item => ({
+        loading_country: item.LoadingCountry,
+        loading_city: item.LoadingCity,
+        loading_postcode: item.LoadingPostcode,
+        loading_lat: null, // Will be populated later if geocoding is added
+        loading_lng: null,
+        
+        delivery_country: item.DeliveryCountry,
+        delivery_city: item.DeliveryCity,
+        delivery_postcode: item.DeliveryPostcode,
+        delivery_lat: null,
+        delivery_lng: null,
+        
+        price: item.Price ? parseFloat(item.Price.replace(/[^\d.,]/g, '').replace(',', '.')) : null,
+        comments: item.Comments
+      })),
+      
+      // Set expiration date (24 hours from now)
+      expirationDate: new Date(Date.now() + 24 * 60 * 60 * 1000),
+      
+      // System fields
+      status: "new",
+      isDeleted: false,
+      created_at: new Date(msg.timestamp * 1000),
+      updated_at: new Date()
+    });
+
+    const saved = await dbDoc.save();
+
+    // 🧠 Step 4: Cache message for revoke tracking
+    if (messageId) {
+      this.msgCache.set(messageId, saved._id.toString());
+      if (this.msgCache.size > this.maxCacheSize) {
+        const firstKey = this.msgCache.keys().next().value;
+        this.msgCache.delete(firstKey);
+      }
+    }
+
+    // 🧠 Step 5: Emit message + AI result to frontend with updated structure
+    io.emit('newMessage', {
+      _id: saved._id,
+      type: saved.type,
+      messageId,
+      groupName: chat.name,
+      senderNumber,
+      senderName,
+      originalContent: msg.body,
+      aiExtracted: saved.aiExtracted, // Send processed AI data
+      created_at: saved.created_at,
+      status: saved.status
+    });
+
+    return saved;
   }
-
-  // 🧠 Step 5: Emit message + AI result to frontend
-  io.emit('newMessage', {
-    _id: saved._id,
-    messageId,
-    groupName: chat.name,
-    senderNumber,
-    senderName,
-    messageContent: msg.body,
-    aiExtracted, // ✅ Send to dashboard too
-    date: saved.date
-  });
-
-  return saved;
-}
 
   initialize(io) {
     this.client = new Client({
@@ -125,7 +160,6 @@ class WhatsAppService {
     });
 
     // Handle revoke/delete for everyone
-    // Signature can be (after, before) depending on wwebjs version
     this.client.on("message_revoke_everyone", async (after, before) => {
       try {
         // Determine messageId: try 'before' first (contains original), else try 'after'
@@ -134,13 +168,12 @@ class WhatsAppService {
 
         if (before && before.id && before.id._serialized) {
           messageId = before.id._serialized;
-          // sometimes 'before.author' or 'before.participant' contains who sent
           deletedBy = before.author || before.participant || null;
         } else if (after && after.id && after.id._serialized) {
           messageId = after.id._serialized;
           deletedBy = after.author || after.participant || null;
         } else if (after && after.key && after.key.id) {
-          messageId = after.key.id; // fallback shapes
+          messageId = after.key.id;
         }
 
         if (!messageId) {
@@ -150,21 +183,20 @@ class WhatsAppService {
 
         // Try cache first
         let savedDocId = this.msgCache.get(messageId);
-
         let msgDoc = null;
+        
         if (savedDocId) {
           msgDoc = await Message.findById(savedDocId);
         } else {
-          // fallback: find by messageId in DB
           msgDoc = await Message.findOne({ messageId });
         }
 
         if (msgDoc) {
           msgDoc.isDeleted = true;
           msgDoc.deletedAt = new Date();
+          msgDoc.deleted_at = new Date(); // Updated field name
           if (deletedBy) msgDoc.deletedBy = deletedBy;
-          // you may want to keep originalContent but blank messageContent:
-          // msgDoc.messageContent = '[deleted]';
+          
           await msgDoc.save();
 
           // notify frontend to update UI
@@ -180,11 +212,6 @@ class WhatsAppService {
       } catch (err) {
         console.error("Error handling message_revoke_everyone:", err);
       }
-    });
-
-    // Some versions use 'message_delete' or 'message_revoke' — you can optionally attach them as well
-    this.client.on("message_revoke", async (...args) => {
-      // optional handle similar to above
     });
 
     this.client.on("disconnected", (reason) => {

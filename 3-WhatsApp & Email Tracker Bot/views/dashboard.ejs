@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Dashboard - WhatsApp Bot</title>
+  <title>Dashboard - WhatsApp & Email Tracker Bot</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
@@ -132,16 +132,32 @@
     tbody tr.new-row {
       background: #e8f5e9;
     }
-    .tag-sold {
-      background: #d32f2f;
+    .tag-whatsapp {
+      background: #25D366;
+      color: white;
+      padding: 4px 8px;
+      border-radius: 3px;
+      font-size: 11px;
+      font-weight: bold;
+    }
+    .tag-email {
+      background: #1976D2;
+      color: white;
+      padding: 4px 8px;
+      border-radius: 3px;
+      font-size: 11px;
+      font-weight: bold;
+    }
+    .tag-new {
+      background: #4CAF50;
       color: white;
       padding: 4px 10px;
       border-radius: 3px;
       font-size: 12px;
       font-weight: bold;
     }
-    .tag-available {
-      background: #4CAF50;
+    .tag-sold {
+      background: #d32f2f;
       color: white;
       padding: 4px 10px;
       border-radius: 3px;
@@ -198,7 +214,7 @@
 </head>
 <body>
   <div class="header">
-    <h1>WhatsApp Bot Dashboard</h1>
+    <h1>WhatsApp & Email Tracker Bot Dashboard</h1>
     <div class="nav">
       <a href="/dashboard">Dashboard</a>
       <a href="/groups">Manage Groups</a>
@@ -219,6 +235,14 @@
         <h3>AI PROCESSED SHIPMENTS (24H)</h3>
         <div class="number" id="totalShipments">0</div>
       </div>
+      <div class="stat-card">
+        <h3>WHATSAPP MESSAGES</h3>
+        <div class="number" id="whatsappMessages">0</div>
+      </div>
+      <div class="stat-card">
+        <h3>EMAIL MESSAGES</h3>
+        <div class="number" id="emailMessages">0</div>
+      </div>
     </div>
 
     <div class="table-container">
@@ -232,8 +256,10 @@
         <table id="shipmentsTable">
           <thead>
             <tr>
-              <th>Group</th>
+              <th>Type</th>
+              <th>Source</th>
               <th>Sender</th>
+              <th>Company</th>
               <th>Loading Location</th>
               <th>Delivery Location</th>
               <th>Price</th>
@@ -244,7 +270,7 @@
           </thead>
           <tbody id="shipmentsBody">
             <tr>
-              <td colspan="8" class="no-data">No shipment data yet. Waiting for messages...</td>
+              <td colspan="10" class="no-data">No shipment data yet. Waiting for messages...</td>
             </tr>
           </tbody>
         </table>
@@ -257,10 +283,10 @@
     const socket = io();
     let allShipments = [];
 
-    // Load initial data from page
+    // Load initial data from page with updated field structure
     function loadInitialData() {
       const messages = JSON.parse('<%- JSON.stringify(messages).replace(/\\/g, '\\\\').replace(/'/g, "\\'") %>');
-    processMessages(messages);
+      processMessages(messages);
     }
 
     function processMessages(messages) {
@@ -271,10 +297,14 @@
           msg.aiExtracted.forEach(shipment => {
             allShipments.push({
               ...shipment,
-              groupName: msg.groupName,
+              type: msg.type,
+              groupName: msg.groupName || 'Email',
               senderNumber: msg.senderNumber,
-              senderName: msg.senderName || msg.senderNumber,
-              date: msg.date,
+              senderName: msg.senderName || msg.senderNumber || msg.senderEmail,
+              senderEmail: msg.senderEmail,
+              company: msg.company,
+              created_at: msg.created_at,
+              status: msg.status,
               messageId: msg._id
             });
           });
@@ -282,29 +312,42 @@
       });
 
       updateTable();
+      updateStats();
     }
 
     function updateTable() {
       const tbody = document.getElementById('shipmentsBody');
       
       if (allShipments.length === 0) {
-        tbody.innerHTML = `<tr><td colspan="8" class="no-data">No shipment data yet. Waiting for messages...</td></tr>`;
-        document.getElementById('totalShipments').textContent = '0';
+        tbody.innerHTML = `<tr><td colspan="10" class="no-data">No shipment data yet. Waiting for messages...</td></tr>`;
         return;
       }
 
       tbody.innerHTML = allShipments.map((shipment, index) => {
-        const loading = formatLocation(shipment.LoadingCity, shipment.LoadingCountry);
-        const delivery = formatLocation(shipment.DeliveryCity, shipment.DeliveryCountry);
-        const price = shipment.Price || '-';
-        const comments = shipment.Comments || '-';
-        const status = shipment.Sold ? '<span class="tag-sold">SOLD</span>' : '<span class="tag-available">AVAILABLE</span>';
-        const dateStr = new Date(shipment.date).toLocaleString();
+        const loading = formatLocationWithPostcode(
+          shipment.loading_city, 
+          shipment.loading_country, 
+          shipment.loading_postcode
+        );
+        const delivery = formatLocationWithPostcode(
+          shipment.delivery_city, 
+          shipment.delivery_country, 
+          shipment.delivery_postcode
+        );
+        const price = shipment.price ? `€${shipment.price}` : '-';
+        const comments = shipment.comments || '-';
+        const status = getStatusTag(shipment.status);
+        const typeTag = getTypeTag(shipment.type);
+        const dateStr = new Date(shipment.created_at).toLocaleString();
+        const source = shipment.groupName || 'Email';
+        const company = shipment.company || '-';
 
         return `
           <tr class="new-row">
-            <td><strong>${escapeHtml(shipment.groupName)}</strong></td>
+            <td>${typeTag}</td>
+            <td><strong>${escapeHtml(source)}</strong></td>
             <td><span class="sender-info">${escapeHtml(shipment.senderName)}</span></td>
+            <td>${escapeHtml(company)}</td>
             <td><div class="location-text">${escapeHtml(loading)}</div></td>
             <td><div class="location-text">${escapeHtml(delivery)}</div></td>
             <td>${price !== '-' ? `<span class="price-tag">${escapeHtml(price)}</span>` : price}</td>
@@ -314,15 +357,34 @@
           </tr>
         `;
       }).join('');
-
-      document.getElementById('totalShipments').textContent = allShipments.length;
     }
 
-    function formatLocation(city, country) {
-      if (city && country) return `${city}, ${country}`;
-      if (city) return city;
-      if (country) return country;
-      return 'Unknown';
+    function updateStats() {
+      const whatsappCount = allShipments.filter(s => s.type === 'whatsapp').length;
+      const emailCount = allShipments.filter(s => s.type === 'email').length;
+      
+      document.getElementById('totalShipments').textContent = allShipments.length;
+      document.getElementById('whatsappMessages').textContent = whatsappCount;
+      document.getElementById('emailMessages').textContent = emailCount;
+    }
+
+    function getTypeTag(type) {
+      if (type === 'whatsapp') return '<span class="tag-whatsapp">WhatsApp</span>';
+      if (type === 'email') return '<span class="tag-email">Email</span>';
+      return '<span class="tag-new">Unknown</span>';
+    }
+
+    function getStatusTag(status) {
+      if (status === 'sold') return '<span class="tag-sold">SOLD</span>';
+      return '<span class="tag-new">NEW</span>';
+    }
+
+    function formatLocationWithPostcode(city, country, postcode) {
+      let parts = [];
+      if (postcode) parts.push(postcode);
+      if (city) parts.push(city);
+      if (country) parts.push(country);
+      return parts.length > 0 ? parts.join(', ') : 'Unknown';
     }
 
     function escapeHtml(text) {
@@ -383,20 +445,25 @@
       }
     }
 
-    // 🟢 When new message arrives
+    // 🟢 When new message arrives with updated structure
     socket.on('newMessage', (message) => {
       if (message.aiExtracted && Array.isArray(message.aiExtracted) && message.aiExtracted.length > 0) {
         message.aiExtracted.forEach(shipment => {
           allShipments.unshift({
             ...shipment,
-            groupName: message.groupName,
+            type: message.type,
+            groupName: message.groupName || 'Email',
             senderNumber: message.senderNumber,
-            senderName: message.senderName || message.senderNumber,
-            date: message.date,
+            senderName: message.senderName || message.senderNumber || message.senderEmail,
+            senderEmail: message.senderEmail,
+            company: message.company,
+            created_at: message.created_at,
+            status: message.status,
             messageId: message._id
           });
         });
         updateTable();
+        updateStats();
         document.getElementById('totalMessages').textContent = parseInt(document.getElementById('totalMessages').textContent) + 1;
       }
     });
@@ -405,6 +472,7 @@
     socket.on('messageDeleted', (payload) => {
       allShipments = allShipments.filter(s => s.messageId !== payload._id);
       updateTable();
+      updateStats();
     });
 
     // 🕒 When messages auto-delete via cron
@@ -412,6 +480,7 @@
       console.log(`${data.deletedCount} messages auto-deleted`);
       allShipments = allShipments.filter(s => !data.messageIds.includes(s.messageId));
       updateTable();
+      updateStats();
     });
 
     // Load initial data on page load

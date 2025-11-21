@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>WhatsApp Login</title>
+  <title>Service Status - WhatsApp & Email Tracker Bot</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
@@ -20,36 +20,85 @@
       border-radius: 10px;
       box-shadow: 0 10px 40px rgba(0,0,0,0.2);
       text-align: center;
-      max-width: 500px;
+      max-width: 600px;
       width: 90%;
     }
     h1 {
       color: #333;
-      margin-bottom: 20px;
+      margin-bottom: 30px;
+    }
+    .services-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+      margin: 30px 0;
+    }
+    .service-card {
+      padding: 20px;
+      border-radius: 8px;
+      border: 2px solid #e0e0e0;
+      transition: all 0.3s ease;
+    }
+    .service-card.whatsapp {
+      background: #f8f9ff;
+      border-color: #25D366;
+    }
+    .service-card.email {
+      background: #fff8f0;
+      border-color: #1976D2;
+    }
+    .service-card.ready {
+      border-color: #4CAF50;
+      box-shadow: 0 4px 12px rgba(76, 175, 80, 0.2);
+    }
+    .service-card.connecting {
+      border-color: #FF9800;
+      box-shadow: 0 4px 12px rgba(255, 152, 0, 0.2);
+    }
+    .service-card.error {
+      border-color: #f44336;
+      box-shadow: 0 4px 12px rgba(244, 67, 54, 0.2);
+    }
+    .service-title {
+      font-size: 18px;
+      font-weight: bold;
+      margin-bottom: 10px;
+      color: #333;
+    }
+    .service-status {
+      padding: 8px 16px;
+      border-radius: 20px;
+      font-size: 14px;
+      font-weight: bold;
+      margin-bottom: 15px;
+      display: inline-block;
+    }
+    .status-ready {
+      background: #4CAF50;
+      color: white;
+    }
+    .status-connecting {
+      background: #FF9800;
+      color: white;
+    }
+    .status-error {
+      background: #f44336;
+      color: white;
+    }
+    .status-disabled {
+      background: #9E9E9E;
+      color: white;
     }
     .qr-container {
-      margin: 30px 0;
+      margin: 20px 0;
       padding: 20px;
       background: #f5f5f5;
       border-radius: 8px;
     }
     .qr-container img {
-      max-width: 300px;
+      max-width: 250px;
       width: 100%;
-    }
-    .status {
-      padding: 15px;
-      border-radius: 5px;
-      margin-top: 20px;
-      font-weight: bold;
-    }
-    .status.waiting {
-      background: #fff3cd;
-      color: #856404;
-    }
-    .status.ready {
-      background: #d4edda;
-      color: #155724;
+      border-radius: 8px;
     }
     .btn {
       background: #25D366;
@@ -62,16 +111,21 @@
       text-decoration: none;
       display: inline-block;
       margin-top: 20px;
+      transition: background 0.3s;
     }
     .btn:hover {
       background: #128C7E;
     }
+    .btn:disabled {
+      background: #cccccc;
+      cursor: not-allowed;
+    }
     .loader {
-      border: 5px solid #f3f3f3;
-      border-top: 5px solid #25D366;
+      border: 4px solid #f3f3f3;
+      border-top: 4px solid #25D366;
       border-radius: 50%;
-      width: 50px;
-      height: 50px;
+      width: 40px;
+      height: 40px;
       animation: spin 1s linear infinite;
       margin: 20px auto;
     }
@@ -79,34 +133,111 @@
       0% { transform: rotate(0deg); }
       100% { transform: rotate(360deg); }
     }
+    .info-text {
+      color: #666;
+      font-size: 14px;
+      line-height: 1.5;
+      margin-top: 15px;
+    }
+    .emoji {
+      font-size: 24px;
+      margin-bottom: 10px;
+    }
+    .connection-info {
+      font-size: 12px;
+      color: #888;
+      margin-top: 10px;
+    }
   </style>
 </head>
 <body>
   <div class="container">
-    <h1>WhatsApp Bot Login</h1>
-    <p>Scan the QR code with your WhatsApp to connect</p>
+    <h1>Service Status Dashboard</h1>
+    <p>Monitor WhatsApp and Email services connectivity</p>
     
-    <div class="qr-container" id="qrContainer">
-      <% if (!isReady && qrCode) { %>
-        <img src="<%= qrCode %>" alt="QR Code" id="qrImage">
-      <% } else if (!isReady && !qrCode) { %>
-        <div class="loader"></div>
-        <p>Generating QR Code...</p>
-      <% } else { %>
-        <div class="status ready">
-          ✓ WhatsApp Connected!
+    <div class="services-grid">
+      <!-- WhatsApp Service Card -->
+      <div class="service-card whatsapp <%= whatsappStatus.isReady ? 'ready' : 'connecting' %>">
+        <div class="emoji">📱</div>
+        <div class="service-title">WhatsApp Service</div>
+        <div class="service-status <%= whatsappStatus.isReady ? 'status-ready' : 'status-connecting' %>">
+          <%= whatsappStatus.isReady ? '✓ Connected' : '⏳ Connecting...' %>
         </div>
+        <div class="connection-info">
+          <%= whatsappStatus.isReady ? 'Ready to monitor groups' : 'Waiting for QR scan' %>
+        </div>
+      </div>
+
+      <!-- Email Service Card -->
+      <div class="service-card email <%= emailStatus.isConnected ? 'ready' : (process.env.EMAIL_USER ? 'connecting' : 'error') %>">
+        <div class="emoji">📧</div>
+        <div class="service-title">Email Service</div>
+        <div class="service-status <%= emailStatus.isConnected ? 'status-ready' : (process.env.EMAIL_USER ? 'status-connecting' : 'status-disabled') %>">
+          <% if (emailStatus.isConnected) { %>
+            ✓ Connected
+          <% } else if (process.env.EMAIL_USER) { %>
+            ⏳ Connecting...
+          <% } else { %>
+            ⚠ Not Configured
+          <% } %>
+        </div>
+        <div class="connection-info">
+          <% if (emailStatus.isConnected) { %>
+            Monitoring inbox for new emails
+          <% } else if (process.env.EMAIL_USER) { %>
+            Connecting to email server...
+          <% } else { %>
+            Email credentials not provided
+          <% } %>
+        </div>
+      </div>
+    </div>
+
+    <!-- WhatsApp QR Code Section -->
+    <% if (!whatsappStatus.isReady) { %>
+      <div class="qr-container" id="whatsappQrContainer">
+        <h3>WhatsApp Connection</h3>
+        <% if (whatsappStatus.qrCode) { %>
+          <img src="<%= whatsappStatus.qrCode %>" alt="QR Code" id="qrImage">
+          <p>Scan this QR code with your WhatsApp</p>
+        <% } else { %>
+          <div class="loader"></div>
+          <p>Generating QR Code...</p>
+        <% } %>
+      </div>
+    <% } %>
+
+    <!-- Email Configuration Info -->
+    <% if (!process.env.EMAIL_USER) { %>
+      <div class="qr-container">
+        <h3>Email Configuration Required</h3>
+        <p class="info-text">
+          To enable email monitoring, please add the following to your .env file:<br><br>
+          <code>EMAIL_USER=your-email@gmail.com</code><br>
+          <code>EMAIL_PASS=your-app-password</code><br>
+          <code>EMAIL_HOST=imap.gmail.com</code><br>
+          <code>EMAIL_PORT=993</code>
+        </p>
+      </div>
+    <% } %>
+
+    <!-- Navigation -->
+    <div id="navigationButtons">
+      <% if (whatsappStatus.isReady) { %>
+        <a href="/groups" class="btn">Continue to Groups Selection</a>
+      <% } %>
+      
+      <% if (whatsappStatus.isReady || emailStatus.isConnected) { %>
+        <a href="/dashboard" class="btn">Go to Dashboard</a>
       <% } %>
     </div>
 
-    <div id="statusMessage">
-      <% if (isReady) { %>
-        <a href="/groups" class="btn">Continue to Groups Selection</a>
-      <% } else { %>
-        <div class="status waiting">
-          Waiting for QR code scan...
-        </div>
-      <% } %>
+    <!-- Service Information -->
+    <div class="info-text">
+      <strong>Services Overview:</strong><br>
+      • WhatsApp: Monitor group messages in real-time<br>
+      • Email: Process incoming emails with AI extraction<br>
+      • Both services use AI to extract logistics data automatically
     </div>
   </div>
 
@@ -114,28 +245,60 @@
   <script>
     const socket = io();
 
+    // Handle WhatsApp QR code updates
     socket.on('qr', (qrCode) => {
-      document.getElementById('qrContainer').innerHTML = `
-        <img src="${qrCode}" alt="QR Code" id="qrImage">
-      `;
-      document.getElementById('statusMessage').innerHTML = `
-        <div class="status waiting">Waiting for QR code scan...</div>
-      `;
+      const qrContainer = document.getElementById('whatsappQrContainer');
+      if (qrContainer) {
+        qrContainer.innerHTML = `
+          <h3>WhatsApp Connection</h3>
+          <img src="${qrCode}" alt="QR Code" id="qrImage">
+          <p>Scan this QR code with your WhatsApp</p>
+        `;
+      }
     });
 
+    // Handle WhatsApp ready
     socket.on('ready', (data) => {
-      document.getElementById('qrContainer').innerHTML = `
-        <div class="status ready">✓ WhatsApp Connected!</div>
-      `;
-      document.getElementById('statusMessage').innerHTML = `
-        <a href="/groups" class="btn">Continue to Groups Selection</a>
-      `;
+      location.reload(); // Refresh to update status
     });
 
+    // Handle WhatsApp disconnection
     socket.on('disconnected', (data) => {
       alert('WhatsApp disconnected. Please refresh the page.');
       location.reload();
     });
+
+    // Handle email service status updates
+    socket.on('email:connected', (data) => {
+      console.log('Email service connected:', data);
+      location.reload(); // Refresh to update status
+    });
+
+    socket.on('email:disconnected', (data) => {
+      console.log('Email service disconnected:', data);
+      // Could show a warning message
+    });
+
+    socket.on('email:error', (data) => {
+      console.error('Email service error:', data);
+      // Could show error message
+    });
+
+    // Handle service status updates
+    socket.on('serviceStatus', (status) => {
+      console.log('Service status update:', status);
+      // Update UI based on service status
+    });
+
+    // Auto-refresh page every 30 seconds if not all services are ready
+    const whatsappReady = <%= whatsappStatus.isReady %>;
+    const emailReady = <%= emailStatus.isConnected %>;
+    
+    if (!whatsappReady && !emailReady) {
+      setTimeout(() => {
+        location.reload();
+      }, 30000);
+    }
   </script>
 </body>
 </html>

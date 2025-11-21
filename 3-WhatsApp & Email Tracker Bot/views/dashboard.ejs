@@ -11,13 +11,18 @@
       background: #f4f4f4;
     }
     .header {
-      background: #25D366;
+      background: linear-gradient(135deg, #25D366 0%, #1976D2 100%);
       color: white;
       padding: 20px;
       box-shadow: 0 2px 5px rgba(0,0,0,0.1);
     }
     .header h1 {
       font-size: 24px;
+      margin-bottom: 5px;
+    }
+    .header .subtitle {
+      font-size: 14px;
+      opacity: 0.9;
     }
     .nav {
       margin-top: 10px;
@@ -29,6 +34,7 @@
       padding: 8px 15px;
       background: rgba(255,255,255,0.2);
       border-radius: 5px;
+      transition: background 0.3s;
     }
     .nav a:hover {
       background: rgba(255,255,255,0.3);
@@ -37,6 +43,59 @@
       max-width: 1400px;
       margin: 20px auto;
       padding: 0 20px;
+    }
+    .service-status {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 15px;
+      margin-bottom: 20px;
+    }
+    .status-card {
+      background: white;
+      padding: 15px 20px;
+      border-radius: 8px;
+      box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+      display: flex;
+      align-items: center;
+      gap: 15px;
+    }
+    .status-card.whatsapp {
+      border-left: 4px solid #25D366;
+    }
+    .status-card.email {
+      border-left: 4px solid #1976D2;
+    }
+    .status-icon {
+      font-size: 24px;
+    }
+    .status-info h3 {
+      margin: 0;
+      font-size: 16px;
+      color: #333;
+    }
+    .status-info p {
+      margin: 5px 0 0 0;
+      font-size: 14px;
+      color: #666;
+    }
+    .status-badge {
+      padding: 4px 8px;
+      border-radius: 12px;
+      font-size: 12px;
+      font-weight: bold;
+      margin-left: auto;
+    }
+    .status-connected {
+      background: #4CAF50;
+      color: white;
+    }
+    .status-disconnected {
+      background: #f44336;
+      color: white;
+    }
+    .status-disabled {
+      background: #9E9E9E;
+      color: white;
     }
     .stats {
       display: grid;
@@ -54,11 +113,15 @@
       color: #666;
       font-size: 14px;
       margin-bottom: 10px;
+      text-transform: uppercase;
     }
     .stat-card .number {
       font-size: 32px;
       font-weight: bold;
       color: #25D366;
+    }
+    .stat-card.email-stat .number {
+      color: #1976D2;
     }
     .table-container {
       background: white;
@@ -78,6 +141,12 @@
     .table-header h2 {
       color: #333;
       margin: 0;
+    }
+    .controls {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      flex-wrap: wrap;
     }
     .btn-export {
       background: #4CAF50;
@@ -100,6 +169,25 @@
       background: #cccccc;
       cursor: not-allowed;
     }
+    .btn-secondary {
+      background: #2196F3;
+      color: white;
+      padding: 10px 20px;
+      border: none;
+      border-radius: 5px;
+      font-size: 14px;
+      cursor: pointer;
+      transition: background 0.3s;
+    }
+    .btn-secondary:hover {
+      background: #1976D2;
+    }
+    .filter-select {
+      padding: 8px 12px;
+      border: 1px solid #ddd;
+      border-radius: 5px;
+      font-size: 14px;
+    }
     .table-wrapper {
       overflow-x: auto;
     }
@@ -120,6 +208,7 @@
       font-weight: bold;
       color: #333;
       font-size: 13px;
+      white-space: nowrap;
     }
     td {
       padding: 12px;
@@ -131,6 +220,7 @@
     }
     tbody tr.new-row {
       background: #e8f5e9;
+      animation: fadeIn 0.5s;
     }
     .tag-whatsapp {
       background: #25D366;
@@ -184,12 +274,13 @@
       font-weight: 500;
       color: #333;
     }
+    .email-info {
+      color: #666;
+      font-size: 12px;
+    }
     @keyframes fadeIn {
       from { opacity: 0; transform: translateY(-10px); }
       to { opacity: 1; transform: translateY(0); }
-    }
-    .new-row {
-      animation: fadeIn 0.3s;
     }
     .toast {
       position: fixed;
@@ -214,44 +305,84 @@
 </head>
 <body>
   <div class="header">
-    <h1>WhatsApp & Email Tracker Bot Dashboard</h1>
+    <h1>WhatsApp & Email Tracker Dashboard</h1>
+    <p class="subtitle">Real-time monitoring of WhatsApp groups and email messages with AI-powered logistics data extraction</p>
     <div class="nav">
       <a href="/dashboard">Dashboard</a>
       <a href="/groups">Manage Groups</a>
+      <a href="/api/service-status" target="_blank">Service Status</a>
     </div>
   </div>
 
   <div class="container">
-    <div class="stats">
-      <div class="stat-card">
-        <h3>TRACKED GROUPS</h3>
-        <div class="number"><%= trackedGroups.length %></div>
+    <!-- Service Status Cards -->
+    <div class="service-status">
+      <div class="status-card whatsapp">
+        <div class="status-icon">📱</div>
+        <div class="status-info">
+          <h3>WhatsApp Service</h3>
+          <p><%= trackedGroups.length %> groups tracked</p>
+        </div>
+        <div class="status-badge <%= whatsappStatus.isReady ? 'status-connected' : 'status-disconnected' %>">
+          <%= whatsappStatus.isReady ? 'Connected' : 'Disconnected' %>
+        </div>
       </div>
-      <div class="stat-card">
-        <h3>TOTAL MESSAGES</h3>
-        <div class="number" id="totalMessages"><%= messages.length %></div>
-      </div>
-      <div class="stat-card">
-        <h3>AI PROCESSED SHIPMENTS (24H)</h3>
-        <div class="number" id="totalShipments">0</div>
-      </div>
-      <div class="stat-card">
-        <h3>WHATSAPP MESSAGES</h3>
-        <div class="number" id="whatsappMessages">0</div>
-      </div>
-      <div class="stat-card">
-        <h3>EMAIL MESSAGES</h3>
-        <div class="number" id="emailMessages">0</div>
+      
+      <div class="status-card email">
+        <div class="status-icon">📧</div>
+        <div class="status-info">
+          <h3>Email Service</h3>
+          <p>IMAP monitoring active</p>
+        </div>
+        <div class="status-badge <%= emailStatus.isConnected ? 'status-connected' : 'status-disabled' %>">
+          <%= emailStatus.isConnected ? 'Connected' : 'Disabled' %>
+        </div>
       </div>
     </div>
 
+    <!-- Statistics Cards -->
+    <div class="stats">
+      <div class="stat-card">
+        <h3>Total Messages</h3>
+        <div class="number" id="totalMessages"><%= stats.totalMessages %></div>
+      </div>
+      <div class="stat-card">
+        <h3>WhatsApp Messages</h3>
+        <div class="number" id="whatsappMessages"><%= stats.whatsappMessages %></div>
+      </div>
+      <div class="stat-card email-stat">
+        <h3>Email Messages</h3>
+        <div class="number" id="emailMessages"><%= stats.emailMessages %></div>
+      </div>
+      <div class="stat-card">
+        <h3>AI Extracted Shipments</h3>
+        <div class="number" id="totalShipments"><%= stats.totalShipments %></div>
+      </div>
+      <div class="stat-card">
+        <h3>Today's Messages</h3>
+        <div class="number" id="todayMessages"><%= stats.todayMessages %></div>
+      </div>
+    </div>
+
+    <!-- Main Data Table -->
     <div class="table-container">
       <div class="table-header">
-        <h2>📦 AI Extracted Shipment Data (Last 24 Hours)</h2>
-        <button class="btn-export" id="exportBtn" onclick="exportToExcel()" title="Download Excel file with last 24 hours of data">
-          📥 Download Excel
-        </button>
+        <h2>📦 AI Extracted Shipment Data</h2>
+        <div class="controls">
+          <select class="filter-select" id="typeFilter" onchange="filterMessages()">
+            <option value="all">All Messages</option>
+            <option value="whatsapp">WhatsApp Only</option>
+            <option value="email">Email Only</option>
+          </select>
+          <button class="btn-secondary" onclick="checkEmails()" id="checkEmailsBtn">
+            📧 Check Emails
+          </button>
+          <button class="btn-export" id="exportBtn" onclick="exportToExcel()" title="Download Excel file with shipment data">
+            📥 Download Excel
+          </button>
+        </div>
       </div>
+      
       <div class="table-wrapper">
         <table id="shipmentsTable">
           <thead>
@@ -270,7 +401,7 @@
           </thead>
           <tbody id="shipmentsBody">
             <tr>
-              <td colspan="10" class="no-data">No shipment data yet. Waiting for messages...</td>
+              <td colspan="10" class="no-data">Loading shipment data...</td>
             </tr>
           </tbody>
         </table>
@@ -282,8 +413,9 @@
   <script>
     const socket = io();
     let allShipments = [];
+    let currentFilter = 'all';
 
-    // Load initial data from page with updated field structure
+    // Load initial data from page
     function loadInitialData() {
       const messages = JSON.parse('<%- JSON.stringify(messages).replace(/\\/g, '\\\\').replace(/'/g, "\\'") %>');
       processMessages(messages);
@@ -298,14 +430,15 @@
             allShipments.push({
               ...shipment,
               type: msg.type,
-              groupName: msg.groupName || 'Email',
+              groupName: msg.groupName || null,
               senderNumber: msg.senderNumber,
               senderName: msg.senderName || msg.senderNumber || msg.senderEmail,
               senderEmail: msg.senderEmail,
               company: msg.company,
               created_at: msg.created_at,
               status: msg.status,
-              messageId: msg._id
+              messageId: msg._id,
+              source: msg.type === 'whatsapp' ? (msg.groupName || 'WhatsApp') : 'Email'
             });
           });
         }
@@ -318,12 +451,18 @@
     function updateTable() {
       const tbody = document.getElementById('shipmentsBody');
       
-      if (allShipments.length === 0) {
-        tbody.innerHTML = `<tr><td colspan="10" class="no-data">No shipment data yet. Waiting for messages...</td></tr>`;
+      // Filter shipments based on current filter
+      let filteredShipments = allShipments;
+      if (currentFilter !== 'all') {
+        filteredShipments = allShipments.filter(s => s.type === currentFilter);
+      }
+      
+      if (filteredShipments.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="10" class="no-data">No shipment data available for the selected filter.</td></tr>`;
         return;
       }
 
-      tbody.innerHTML = allShipments.map((shipment, index) => {
+      tbody.innerHTML = filteredShipments.map((shipment, index) => {
         const loading = formatLocationWithPostcode(
           shipment.loading_city, 
           shipment.loading_country, 
@@ -339,14 +478,19 @@
         const status = getStatusTag(shipment.status);
         const typeTag = getTypeTag(shipment.type);
         const dateStr = new Date(shipment.created_at).toLocaleString();
-        const source = shipment.groupName || 'Email';
         const company = shipment.company || '-';
+
+        // Enhanced sender info for emails
+        let senderDisplay = escapeHtml(shipment.senderName);
+        if (shipment.type === 'email' && shipment.senderEmail) {
+          senderDisplay += `<br><span class="email-info">${escapeHtml(shipment.senderEmail)}</span>`;
+        }
 
         return `
           <tr class="new-row">
             <td>${typeTag}</td>
-            <td><strong>${escapeHtml(source)}</strong></td>
-            <td><span class="sender-info">${escapeHtml(shipment.senderName)}</span></td>
+            <td><strong>${escapeHtml(shipment.source)}</strong></td>
+            <td><span class="sender-info">${senderDisplay}</span></td>
             <td>${escapeHtml(company)}</td>
             <td><div class="location-text">${escapeHtml(loading)}</div></td>
             <td><div class="location-text">${escapeHtml(delivery)}</div></td>
@@ -366,6 +510,11 @@
       document.getElementById('totalShipments').textContent = allShipments.length;
       document.getElementById('whatsappMessages').textContent = whatsappCount;
       document.getElementById('emailMessages').textContent = emailCount;
+    }
+
+    function filterMessages() {
+      currentFilter = document.getElementById('typeFilter').value;
+      updateTable();
     }
 
     function getTypeTag(type) {
@@ -407,6 +556,28 @@
       setTimeout(() => toast.remove(), 3000);
     }
 
+    async function checkEmails() {
+      const btn = document.getElementById('checkEmailsBtn');
+      btn.disabled = true;
+      btn.textContent = '⏳ Checking...';
+      
+      try {
+        const response = await fetch('/api/check-emails', { method: 'POST' });
+        const data = await response.json();
+        
+        if (data.success) {
+          showToast('✅ Email check initiated');
+        } else {
+          showToast('❌ Email check failed', true);
+        }
+      } catch (error) {
+        showToast('❌ Error checking emails', true);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = '📧 Check Emails';
+      }
+    }
+
     async function exportToExcel() {
       if (allShipments.length === 0) {
         showToast('No data to export', true);
@@ -445,42 +616,57 @@
       }
     }
 
-    // 🟢 When new message arrives with updated structure
+    // Socket event handlers
     socket.on('newMessage', (message) => {
       if (message.aiExtracted && Array.isArray(message.aiExtracted) && message.aiExtracted.length > 0) {
         message.aiExtracted.forEach(shipment => {
           allShipments.unshift({
             ...shipment,
             type: message.type,
-            groupName: message.groupName || 'Email',
+            groupName: message.groupName || null,
             senderNumber: message.senderNumber,
             senderName: message.senderName || message.senderNumber || message.senderEmail,
             senderEmail: message.senderEmail,
             company: message.company,
             created_at: message.created_at,
             status: message.status,
-            messageId: message._id
+            messageId: message._id,
+            source: message.type === 'whatsapp' ? (message.groupName || 'WhatsApp') : 'Email'
           });
         });
         updateTable();
         updateStats();
-        document.getElementById('totalMessages').textContent = parseInt(document.getElementById('totalMessages').textContent) + 1;
+        
+        // Update total messages counter
+        const currentTotal = parseInt(document.getElementById('totalMessages').textContent);
+        document.getElementById('totalMessages').textContent = currentTotal + 1;
+        
+        showToast(`📨 New ${message.type} message processed with ${message.aiExtracted.length} shipment(s)`);
       }
     });
 
-    // 🔴 When a message is deleted
     socket.on('messageDeleted', (payload) => {
       allShipments = allShipments.filter(s => s.messageId !== payload._id);
       updateTable();
       updateStats();
     });
 
-    // 🕒 When messages auto-delete via cron
     socket.on('messageDeletedBatch', (data) => {
       console.log(`${data.deletedCount} messages auto-deleted`);
       allShipments = allShipments.filter(s => !data.messageIds.includes(s.messageId));
       updateTable();
       updateStats();
+      showToast(`🗑️ ${data.deletedCount} expired messages removed`);
+    });
+
+    // Service status updates
+    socket.on('email:connected', () => {
+      showToast('📧 Email service connected');
+      setTimeout(() => location.reload(), 2000);
+    });
+
+    socket.on('email:disconnected', () => {
+      showToast('⚠️ Email service disconnected', true);
     });
 
     // Load initial data on page load

@@ -26,10 +26,12 @@ Each item must strictly have these fields:
 {
   "LoadingCountry": string or null,
   "LoadingCity": string or null,
+  "LoadingPostcode": string or null,    // e.g., LF7, 10115, etc.
   "DeliveryCountry": string or null,
   "DeliveryCity": string or null,
+  "DeliveryPostcode": string or null,
   "Price": string or null,
-  "Comments": string or null,
+  "Comments": string or null,           // only descriptive text like "READY TO LOAD"
   "Sold": boolean
 }
 
@@ -37,7 +39,9 @@ Rules:
 - Detect "SOLD" (case-insensitive, may appear as ❌SOLD❌, SOLD, or similar) → Sold = true
 - Extract all numeric or currency prices (e.g. "€700", "2000 EUR", "1500€")
 - Country is the emoji flag or derived from the city if possible (e.g. 🇩🇪 → Germany)
-- Comments are any relevant descriptive text like "READY TO LOAD", "LF7", etc.
+- Postal codes may appear next to the city or in the text (e.g., "LF7", "10115 Berlin") — extract them into LoadingPostcode and DeliveryPostcode
+- Do NOT include postal codes in Comments
+- Comments are any other relevant descriptive text like "READY TO LOAD", "URGENT", etc.
 - If no shipment info is found, return an empty JSON array: []
 
 ⚠️ Output format rules:
@@ -52,6 +56,7 @@ Message:
 ${messageText}
 """
 `;
+
 
     // 🧠 Send to GPT
     const completion = await openai.chat.completions.create({

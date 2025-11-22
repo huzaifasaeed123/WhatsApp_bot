@@ -1,64 +1,83 @@
-# WhatsApp & Email Tracker Bot - Ubuntu Deployment Guide
+# WhatsApp & Email Tracker Bot 🚀
 
-## Overview
-This guide will help you deploy the WhatsApp & Email Tracker Bot on an Ubuntu server step by step.
+A comprehensive WhatsApp group monitoring and email tracking system with AI-powered logistics data extraction capabilities. This system can track multiple WhatsApp groups simultaneously, process messages using OpenAI's GPT models to extract structured logistics information, and provide real-time dashboard monitoring with automatic message cleanup functionality.
 
----
+## 🌟 Features
 
-## 1. Get the Project
+### 📱 WhatsApp Integration
+- **QR Code Authentication**: Easy setup with WhatsApp Web
+- **Multi-Group Monitoring**: Track multiple WhatsApp groups simultaneously
+- **Real-time Processing**: Instant message processing and analysis
+- **Session Persistence**: Automatic session restoration
+- **Message Tracking**: Complete message lifecycle management including deletions
 
-Clone the project from GitHub and navigate to the project folder:
+### 📧 Email Integration
+- **IMAP Support**: Monitor Gmail and other email providers
+- **Automatic Processing**: Real-time email processing with AI extraction
+- **SMTP Responses**: Send automated responses via email
+- **App Password Support**: Secure authentication with Gmail App Passwords
 
+### 🤖 AI-Powered Processing
+- **OpenAI GPT Integration**: Advanced message analysis and data extraction
+- **Logistics Data Extraction**: Automatic extraction of shipping details including:
+  - Loading and delivery locations (cities, countries, postcodes)
+  - Pricing information
+  - Status indicators (SOLD detection)
+  - Comments and additional details
+- **Multi-language Support**: Process messages in various languages
+- **Structured Output**: Consistent JSON format for extracted data
+
+### 🖥️ Web Dashboard
+- **Real-time Monitoring**: Live message feed with instant updates
+- **Advanced Search**: Search by location, sender, price, or any criteria
+- **Filtering Options**: Filter by message type, status, timeframe
+- **Statistics Dashboard**: Comprehensive analytics and insights
+- **Excel Export**: Download data in Excel format
+- **Response Management**: Send automated responses to specific shipments
+
+### 🔧 System Features
+- **Automated Cleanup**: Scheduled message expiration and cleanup
+- **Database Integration**: MongoDB for reliable data storage
+- **Process Management**: PM2 for production deployment
+- **Real-time Updates**: Socket.io for live dashboard updates
+- **Error Handling**: Comprehensive error handling and logging
+
+## 🛠️ Technology Stack
+
+- **Backend**: Node.js, Express.js
+- **Database**: MongoDB with Mongoose
+- **WhatsApp**: whatsapp-web.js
+- **Email**: mail-listener2, nodemailer, imap
+- **AI**: OpenAI GPT API
+- **Frontend**: EJS templates with Socket.io
+- **Process Management**: PM2
+- **Task Scheduling**: node-cron
+
+## 📋 Prerequisites
+
+- **Node.js** v16+ 
+- **MongoDB** (local or cloud)
+- **OpenAI API Key** (required for AI processing)
+- **Gmail Account** (for email monitoring - optional)
+- **Ubuntu/Linux Server** (for deployment)
+
+## 🚀 Quick Start
+
+### 1. Clone the Repository
 ```bash
 git clone https://github.com/huzaifasaeed123/WhatsApp_bot.git
 cd "WhatsApp_bot/WhatsApp & Email Tracker Bot"
 ```
 
----
-
-## 2. Install Node.js
-
-### Check if Node.js is installed:
-```bash
-node -v
-```
-
-### If not installed, install Node.js (recommended v18+):
-```bash
-curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
-sudo apt install -y nodejs
-```
-
-### Verify installation:
-```bash
-node -v
-npm -v
-```
-
----
-
-## 3. Install Project Dependencies
-
-Inside the project directory, run:
-
+### 2. Install Dependencies
 ```bash
 npm install
 ```
 
-This installs all required dependencies from package.json.
-
----
-
-## 4. Create .env File
-
-### Create a .env file using the following command:
-```bash
-nano .env
-```
-
-### Paste the following content and update only the highlighted values:
+### 3. Configure Environment
+Create a `.env` file:
 ```env
-OPENAI_API_KEY=YOUR_OPENAI_API_KEY
+OPENAI_API_KEY=your_openai_api_key_here
 EMAIL_USER=your_email@gmail.com
 EMAIL_PASS=your_gmail_app_password
 EMAIL_HOST=imap.gmail.com
@@ -68,217 +87,272 @@ PORT=3000
 NODE_ENV=development
 ```
 
-### Important Notes:
-- **EMAIL_PASS** should be a Gmail App Password, not your normal Gmail password
-- **OPENAI_API_KEY** should be your OpenAI API key
-- Keep other values as default unless needed to change
-
-### Save the file:
-Press `Ctrl+O`, then `Enter`, then `Ctrl+X` to exit.
-
----
-
-## 5. Install MongoDB
-
-### Install MongoDB on Ubuntu:
+### 4. Start the Application
 ```bash
+# Development
+npm run dev
+
+# Production
+npm start
+```
+
+### 5. Access the Dashboard
+Open your browser and navigate to:
+```
+http://localhost:3000
+```
+
+## 📖 Detailed Setup
+
+### Environment Variables
+
+| Variable | Description | Required | Default |
+|----------|-------------|----------|---------|
+| `OPENAI_API_KEY` | OpenAI API key for AI processing | Yes | - |
+| `EMAIL_USER` | Email address for monitoring | No | - |
+| `EMAIL_PASS` | Gmail App Password | No | - |
+| `EMAIL_HOST` | IMAP server host | No | imap.gmail.com |
+| `EMAIL_PORT` | IMAP server port | No | 993 |
+| `MONGODB_URI` | MongoDB connection string | No | mongodb://localhost:27017/monitor_bot |
+| `PORT` | Server port | No | 3000 |
+| `NODE_ENV` | Environment mode | No | development |
+
+### Getting Required Credentials
+
+#### OpenAI API Key
+1. Visit [OpenAI API Keys](https://platform.openai.com/api-keys)
+2. Create a new secret key
+3. Copy the key (starts with `sk-proj-`)
+
+#### Gmail App Password
+1. Enable 2-Factor Authentication on your Google account
+2. Visit [Google App Passwords](https://myaccount.google.com/apppasswords)
+3. Generate an app password for "Mail"
+4. Use this 16-character password (not your regular Gmail password)
+
+## 🏗️ Project Structure
+
+```
+WhatsApp & Email Tracker Bot/
+├── controllers/
+│   └── adminController.js      # Main application controller
+├── models/
+│   ├── Message.js              # Message data schema
+│   └── TrackedGroup.js         # Group management schema
+├── services/
+│   ├── whatsappService.js      # WhatsApp integration
+│   ├── emailService.js         # Email integration
+│   ├── aiProcessor.js          # AI processing engine
+│   └── cron_service.js         # Automated cleanup
+├── routes/
+│   └── index.js               # Application routes
+├── views/
+│   ├── login.ejs              # Authentication page
+│   ├── groups.ejs             # Group management
+│   └── dashboard.ejs          # Main dashboard
+├── server.js                  # Application entry point
+├── package.json               # Dependencies and scripts
+└── README.md                  # This file
+```
+
+## 🔌 API Endpoints
+
+### Web Routes
+- `GET /` - Authentication/QR code page
+- `GET /groups` - Group management interface
+- `POST /track-groups` - Configure group tracking
+- `GET /dashboard` - Main dashboard
+
+### API Routes
+- `GET /api/messages` - Retrieve messages with filtering
+- `GET /api/export-excel` - Export data to Excel
+- `GET /api/service-status` - Check service status
+- `POST /api/send-response` - Send automated responses
+- `GET /api/templates` - Get response templates
+- `POST /api/templates` - Update response templates
+
+## 📊 Dashboard Features
+
+### Real-time Statistics
+- Total messages processed
+- Active messages count
+- Last 24 hours activity
+- Total shipments extracted
+- Service status indicators
+
+### Advanced Search & Filtering
+- **Search by**: Location, sender, company, phone, email, comments
+- **Filter by**: Message type (WhatsApp/Email), status (Active/Deleted), time period
+- **Pagination**: Configurable results per page
+- **Export**: Download filtered results to Excel
+
+### Message Management
+- View all extracted shipment details
+- Send responses to specific shipments
+- Track message deletion status
+- Real-time updates via WebSocket
+
+## 🤖 AI Processing Details
+
+### Supported Data Extraction
+- **Loading Information**: City, country, postal code
+- **Delivery Information**: City, country, postal code
+- **Pricing**: Multiple currency formats support
+- **Status**: SOLD detection and status tracking
+- **Comments**: Additional descriptive information
+
+### Processing Rules
+- Multi-shipment message support
+- Flag emoji to country mapping
+- Case-insensitive status detection
+- JSON structure enforcement
+- Error handling and fallback mechanisms
+
+## 🔧 Production Deployment
+
+### Using PM2
+```bash
+# Install PM2
+sudo npm install -g pm2
+
+# Start application
+pm2 start server.js --name "whatsapp-email-tracker"
+
+# Save configuration
+pm2 save
+
+# Setup auto-start
+pm2 startup
+```
+
+### MongoDB Setup
+```bash
+# Ubuntu/Debian
 sudo apt update
 sudo apt install -y mongodb
 sudo systemctl start mongodb
 sudo systemctl enable mongodb
 ```
 
-### Check MongoDB status:
+### Security Considerations
+- Use environment variables for sensitive data
+- Enable firewall rules for required ports
+- Regular security updates
+- Monitor application logs
+- Secure MongoDB installation
+
+## 📱 WhatsApp Setup
+
+1. **Access the application** at `http://your-server:3000`
+2. **Scan QR code** with your WhatsApp mobile app
+3. **Select groups** to monitor from the groups page
+4. **Start monitoring** - messages will appear on the dashboard
+
+## 📧 Email Setup
+
+1. **Configure Gmail** with 2-Factor Authentication
+2. **Generate App Password** (not regular password)
+3. **Update .env file** with email credentials
+4. **Restart application** to activate email monitoring
+
+## 🔍 Troubleshooting
+
+### Common Issues
+
+#### Application Won't Start
 ```bash
-sudo systemctl status mongodb
-```
+# Check logs
+pm2 logs whatsapp-email-tracker
 
-**Ensure MongoDB is running before starting the bot.**
-
----
-
-## 6. Install PM2
-
-PM2 is used to run the bot in the background:
-
-```bash
-sudo npm install -g pm2
-pm2 -v
-```
-
----
-
-## 7. Start the Bot with PM2
-
-### Start the bot using PM2:
-```bash
-pm2 start server.js --name "WhatsApp_Email_Bot"
-```
-
-### Check bot logs:
-```bash
-pm2 logs WhatsApp_Email_Bot
-```
-
----
-
-## 8. Set PM2 to Auto-Start on Reboot
-
-```bash
-pm2 startup systemd
-pm2 save
-```
-
-The bot will now automatically restart if the server reboots.
-
----
-
-## 9. Access the Bot
-
-- The bot will run on **PORT 3000** by default (as set in .env)
-- Ensure your server firewall allows the port if needed:
-
-```bash
-sudo ufw allow 3000
-sudo ufw status
-```
-
----
-
-## 10. Quick Command Summary
-
-For quick deployment, run these commands in sequence:
-
-```bash
-git clone https://github.com/huzaifasaeed123/WhatsApp_bot.git
-cd "WhatsApp_bot/WhatsApp & Email Tracker Bot"
-curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
-sudo apt install -y nodejs
+# Verify dependencies
 npm install
-nano .env
-sudo apt install -y mongodb
-sudo systemctl start mongodb
-sudo systemctl enable mongodb
-sudo npm install -g pm2
-pm2 start server.js --name "WhatsApp_Email_Bot"
-pm2 startup systemd
-pm2 save
-pm2 logs WhatsApp_Email_Bot
-sudo ufw allow 3000
-```
 
----
-
-## 11. Post-Deployment Verification
-
-### Access the application:
-Open your web browser and go to:
-```
-http://YOUR_SERVER_IP:3000
-```
-
-### Verify services are running:
-```bash
-pm2 status
+# Check MongoDB
 sudo systemctl status mongodb
 ```
 
----
-
-## 12. Troubleshooting
-
-### If the bot doesn't start:
-1. Check logs: `pm2 logs WhatsApp_Email_Bot`
-2. Verify .env file: `cat .env`
-3. Check MongoDB: `sudo systemctl status mongodb`
-4. Restart services: `pm2 restart WhatsApp_Email_Bot`
-
-### If you can't access the web interface:
-1. Check firewall: `sudo ufw status`
-2. Verify port: `netstat -tulpn | grep :3000`
-3. Check server logs: `pm2 logs WhatsApp_Email_Bot`
-
----
-
-## 13. Maintenance Commands
-
-### View application status:
+#### WhatsApp QR Not Appearing
 ```bash
-pm2 status
+# Restart application
+pm2 restart whatsapp-email-tracker
+
+# Check Chrome/Chromium installation
+google-chrome --version
 ```
 
-### Restart the application:
+#### Email Not Working
+- Verify Gmail App Password (16 characters with spaces)
+- Ensure 2FA is enabled on Gmail account
+- Check email credentials in .env file
+
+#### AI Processing Errors
+- Verify OpenAI API key is valid
+- Check API quota and billing
+- Monitor logs for specific error messages
+
+## 📈 Performance Optimization
+
+### Database Indexing
+The application automatically creates necessary indexes for:
+- Message IDs for quick lookups
+- Creation dates for time-based queries
+- Deletion status for filtering
+
+### Caching
+- In-memory message ID cache for revocation tracking
+- Efficient MongoDB queries with lean operations
+- Real-time updates via Socket.io
+
+### Monitoring
 ```bash
-pm2 restart WhatsApp_Email_Bot
+# Monitor application performance
+pm2 monit
+
+# Check system resources
+htop
+
+# Monitor MongoDB
+mongo --eval "db.runCommand({serverStatus: 1})"
 ```
 
-### Stop the application:
-```bash
-pm2 stop WhatsApp_Email_Bot
-```
+## 🤝 Contributing
 
-### View real-time logs:
-```bash
-pm2 logs WhatsApp_Email_Bot --lines 100
-```
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Test thoroughly
+5. Submit a pull request
 
----
+## 📄 License
 
-## 14. Required Credentials Setup
+This project is licensed under the ISC License - see the package.json file for details.
 
-### OpenAI API Key:
-1. Go to: https://platform.openai.com/api-keys
-2. Login to your OpenAI account
-3. Click "Create new secret key"
-4. Copy the key (starts with `sk-proj-`)
+## 💬 Support
 
-### Gmail App Password:
-1. Go to: https://myaccount.google.com/apppasswords
-2. Select app: "Mail"
-3. Select device: "Other (custom name)"
-4. Generate password
-5. Copy the 16-character password (with spaces)
+For support, issues, or feature requests:
 
----
+1. Check the troubleshooting section
+2. Review the deployment guide
+3. Check application logs
+4. Contact the development team
 
-## 15. Security Considerations
+## 🔄 Version History
 
-- Keep your `.env` file secure and never commit it to version control
-- Use strong passwords for email accounts
-- Consider using environment variables on production servers
-- Regularly update dependencies: `npm update`
-- Monitor logs for any suspicious activity
+- **v1.0.0** - Initial release with WhatsApp and Email integration
+- **v1.1.0** - Enhanced search functionality and AI processing
+- **v1.2.0** - Added response management and templates
+- **v1.3.0** - Improved dashboard and real-time updates
 
----
+## 🎯 Roadmap
 
-## 16. Features Overview
-
-### WhatsApp Integration:
-- QR code-based authentication
-- Real-time group monitoring
-- Message tracking and processing
-- Automated responses to specific shipments
-
-### Email Integration:
-- IMAP-based email monitoring
-- Automatic email processing
-- Support for Gmail and other providers
-- Email response capabilities
-
-### AI Processing:
-- OpenAI GPT integration for logistics data extraction
-- Automatic extraction of shipping details
-- Support for multiple languages and formats
-- Structured data output
-
-### Web Dashboard:
-- Real-time message monitoring
-- Advanced search and filtering
-- Export to Excel functionality
-- Service status monitoring
+- [ ] Advanced analytics and reporting
+- [ ] Multi-language dashboard support
+- [ ] Integration with more messaging platforms
+- [ ] Advanced AI processing capabilities
+- [ ] Mobile application for monitoring
+- [ ] API rate limiting and authentication
+- [ ] Advanced user management and roles
 
 ---
 
-**Your WhatsApp & Email Tracker Bot is now successfully deployed and running on Ubuntu!**
-
-For support or issues, please check the troubleshooting section or contact the development team.
+**Built with ❤️ for logistics professionals who need efficient communication monitoring and data extraction.**

@@ -130,48 +130,30 @@ exports.getMessages = async (req, res) => {
       limit = 100            // items per page (max 1000)
     } = req.query;
 
-    // Build query conditions
-    const query = {};
+    // Build base query conditions
+    const baseQuery = {};
     
     // Type filter
     if (type !== 'all') {
-      query.type = type;
+      baseQuery.type = type;
     }
     
     // Status filter
     if (status === 'active') {
-      query.isDeleted = false;
+      baseQuery.isDeleted = false;
     } else if (status === 'deleted') {
-      query.isDeleted = true;
+      baseQuery.isDeleted = true;
     }
     // 'all' means no status filter
     
     // Timeframe filter
     const now = new Date();
     if (timeframe === 'last24h') {
-      query.created_at = { $gte: new Date(now.getTime() - 24 * 60 * 60 * 1000) };
+      baseQuery.created_at = { $gte: new Date(now.getTime() - 24 * 60 * 60 * 1000) };
     } else if (timeframe === 'last7d') {
-      query.created_at = { $gte: new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000) };
+      baseQuery.created_at = { $gte: new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000) };
     } else if (timeframe === 'last30d') {
-      query.created_at = { $gte: new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000) };
-    }
-    
-    // Search functionality
-    if (search) {
-      const searchRegex = new RegExp(search, 'i'); // Case-insensitive
-      query.$or = [
-        { senderName: searchRegex },
-        { senderEmail: searchRegex },
-        { senderNumber: searchRegex },
-        { company: searchRegex },
-        { groupName: searchRegex },
-        { originalContent: searchRegex },
-        { 'aiExtracted.loading_city': searchRegex },
-        { 'aiExtracted.loading_country': searchRegex },
-        { 'aiExtracted.delivery_city': searchRegex },
-        { 'aiExtracted.delivery_country': searchRegex },
-        { 'aiExtracted.comments': searchRegex }
-      ];
+      baseQuery.created_at = { $gte: new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000) };
     }
 
     // Pagination
@@ -179,36 +161,225 @@ exports.getMessages = async (req, res) => {
     const limitNum = Math.min(1000, Math.max(1, parseInt(limit))); // Max 1000, min 1
     const skip = (pageNum - 1) * limitNum;
 
-    // Get total count for pagination
-    const totalCount = await Message.countDocuments(query);
-    const totalPages = Math.ceil(totalCount / limitNum);
-
-    // Get messages with pagination
-    const messages = await Message.find(query)
-      .sort({ created_at: -1 })
-      .skip(skip)
-      .limit(limitNum)
-      .lean(); // Use lean for better performance
-
-    res.json({
-      success: true,
-      messages,
-      pagination: {
-        currentPage: pageNum,
-        totalPages,
-        totalCount,
-        hasNextPage: pageNum < totalPages,
-        hasPrevPage: pageNum > 1,
-        limit: limitNum
-      },
-      filters: {
-        type,
-        status,
-        timeframe,
-        search
+    // SEARCH FUNCTIONALITY - Search within specific offers/shipments
+    if (search && search.trim()) {
+  const searchRegex = new RegExp(search.trim(), 'gi'); // Case-insensitive global search
+  
+  // Use MongoDB aggregation to search within aiExtracted array elements AND message fields
+  const pipeline = [
+    // First apply base filters (type, status, timeframe)
+    { $match: baseQuery },
+    
+    // Add a field to check if message-level fields match the search
+    {
+      $addFields: {
+        messageMatches: {
+          $or: [
+            { $regexMatch: { input: { $ifNull: ['$senderName', ''] }, regex: searchRegex } },
+            { $regexMatch: { input: { $ifNull: ['$senderEmail', ''] }, regex: searchRegex } },
+            { $regexMatch: { input: { $ifNull: ['$senderNumber', ''] }, regex: searchRegex } },
+            { $regexMatch: { input: { $ifNull: ['$company', ''] }, regex: searchRegex } },
+            { $regexMatch: { input: { $ifNull: ['$groupName', ''] }, regex: searchRegex } }
+          ]
+        }
       }
-    });
+    },
+    
+    // Unwind the aiExtracted array to work with individual shipments
+    { $unwind: { path: '$aiExtracted', preserveNullAndEmptyArrays: true } },
+    
+    // Filter based on search criteria (either message matches OR shipment matches)
+    {
+      $match: {
+        $or: [
+          // Message-level match
+          { messageMatches: true },
+          // Shipment-level match
+          {
+            $or: [
+              { 'aiExtracted.loading_city': searchRegex },
+              { 'aiExtracted.loading_country': searchRegex },
+              { 'aiExtracted.delivery_city': searchRegex },
+              { 'aiExtracted.delivery_country': searchRegex },
+              { 'aiExtracted.loading_postcode': searchRegex },
+              { 'aiExtracted.delivery_postcode': searchRegex },
+              { 'aiExtracted.comments': searchRegex }
+            ]
+          }
+        ]
+      }
+    },
+    
+    // Group back to reconstruct message with matching shipments
+    {
+      $group: {
+        _id: '$_id',
+        type: { $first: '$type' },
+        senderName: { $first: '$senderName' },
+        senderEmail: { $first: '$senderEmail' },
+        senderNumber: { $first: '$senderNumber' },
+        company: { $first: '$company' },
+        groupName: { $first: '$groupName' },
+        originalContent: { $first: '$originalContent' },
+        isDeleted: { $first: '$isDeleted' },
+        deletedAt: { $first: '$deletedAt' },
+        created_at: { $first: '$created_at' },
+        updated_at: { $first: '$updated_at' },
+        expirationDate: { $first: '$expirationDate' },
+        status: { $first: '$status' },
+        messageMatches: { $first: '$messageMatches' },
+        aiExtracted: { 
+          $push: {
+            $cond: [
+              '$messageMatches',
+              '$aiExtracted', // If message matches, include all shipments
+              {
+                $cond: [
+                  {
+                    $or: [
+                      { $regexMatch: { input: { $ifNull: ['$aiExtracted.loading_city', ''] }, regex: searchRegex } },
+                      { $regexMatch: { input: { $ifNull: ['$aiExtracted.loading_country', ''] }, regex: searchRegex } },
+                      { $regexMatch: { input: { $ifNull: ['$aiExtracted.delivery_city', ''] }, regex: searchRegex } },
+                      { $regexMatch: { input: { $ifNull: ['$aiExtracted.delivery_country', ''] }, regex: searchRegex } },
+                      { $regexMatch: { input: { $ifNull: ['$aiExtracted.loading_postcode', ''] }, regex: searchRegex } },
+                      { $regexMatch: { input: { $ifNull: ['$aiExtracted.delivery_postcode', ''] }, regex: searchRegex } },
+                      { $regexMatch: { input: { $ifNull: ['$aiExtracted.comments', ''] }, regex: searchRegex } }
+                    ]
+                  },
+                  '$aiExtracted', // If shipment matches, include this shipment
+                  '$$REMOVE' // Otherwise, don't include this shipment
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    
+    // Remove messages with empty aiExtracted arrays (unless message-level match)
+    {
+      $match: {
+        $or: [
+          { messageMatches: true },
+          { $expr: { $gt: [{ $size: '$aiExtracted' }, 0] } }
+        ]
+      }
+    },
+    
+    // Clean up the messageMatches field
+    {
+      $project: {
+        messageMatches: 0
+      }
+    },
+    
+    // Sort by creation date (newest first)
+    { $sort: { created_at: -1 } },
+    
+    // Apply pagination
+    { $skip: skip },
+    { $limit: limitNum }
+  ];
+  
+  // Use aggregation instead of find for search
+  const messages = await Message.aggregate(pipeline);
+  
+  // Get total count for pagination (separate aggregation)
+  const countPipeline = [
+    { $match: baseQuery },
+    {
+      $addFields: {
+        messageMatches: {
+          $or: [
+            { $regexMatch: { input: { $ifNull: ['$senderName', ''] }, regex: searchRegex } },
+            { $regexMatch: { input: { $ifNull: ['$senderEmail', ''] }, regex: searchRegex } },
+            { $regexMatch: { input: { $ifNull: ['$senderNumber', ''] }, regex: searchRegex } },
+            { $regexMatch: { input: { $ifNull: ['$company', ''] }, regex: searchRegex } },
+            { $regexMatch: { input: { $ifNull: ['$groupName', ''] }, regex: searchRegex } }
+          ]
+        }
+      }
+    },
+    { $unwind: { path: '$aiExtracted', preserveNullAndEmptyArrays: true } },
+    {
+      $match: {
+        $or: [
+          { messageMatches: true },
+          {
+            $or: [
+              { 'aiExtracted.loading_city': searchRegex },
+              { 'aiExtracted.loading_country': searchRegex },
+              { 'aiExtracted.delivery_city': searchRegex },
+              { 'aiExtracted.delivery_country': searchRegex },
+              { 'aiExtracted.loading_postcode': searchRegex },
+              { 'aiExtracted.delivery_postcode': searchRegex },
+              { 'aiExtracted.comments': searchRegex }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      $group: {
+        _id: '$_id'
+      }
+    },
+    { $count: 'total' }
+  ];
+  
+  const countResult = await Message.aggregate(countPipeline);
+  const totalCount = countResult[0]?.total || 0;
+  const totalPages = Math.ceil(totalCount / limitNum);
 
+  res.json({
+    success: true,
+    messages,
+    pagination: {
+      currentPage: pageNum,
+      totalPages,
+      totalCount,
+      hasNextPage: pageNum < totalPages,
+      hasPrevPage: pageNum > 1,
+      limit: limitNum
+    },
+    filters: {
+      type,
+      status,
+      timeframe,
+      search
+    }
+  });
+
+} else {
+  // No search - use regular find query
+  const totalCount = await Message.countDocuments(baseQuery);
+  const totalPages = Math.ceil(totalCount / limitNum);
+
+  const messages = await Message.find(baseQuery)
+    .sort({ created_at: -1 })
+    .skip(skip)
+    .limit(limitNum)
+    .lean();
+
+  res.json({
+    success: true,
+    messages,
+    pagination: {
+      currentPage: pageNum,
+      totalPages,
+      totalCount,
+      hasNextPage: pageNum < totalPages,
+      hasPrevPage: pageNum > 1,
+      limit: limitNum
+    },
+    filters: {
+      type,
+      status,
+      timeframe,
+      search
+    }
+  });
+}
   } catch (error) {
     console.error('Error in getMessages:', error);
     res.status(500).json({ success: false, error: error.message });

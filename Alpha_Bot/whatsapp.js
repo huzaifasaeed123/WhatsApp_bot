@@ -4,6 +4,40 @@ const fs = require('fs');
 const path = require('path');
 
 const AUTH_PATH = './.wwebjs_auth';
+// Settings file lives INSIDE the auth folder so it rides the same persistent
+// volume (mounted at /app/.wwebjs_auth on the server) — survives redeploys.
+const SETTINGS_PATH = path.join(AUTH_PATH, 'bot-settings.json');
+
+// Persist the user-configurable settings (not runtime/session fields) to JSON.
+function saveSettings() {
+  try {
+    if (!fs.existsSync(AUTH_PATH)) fs.mkdirSync(AUTH_PATH, { recursive: true });
+    const data = {
+      selectedGroups: state.selectedGroups,
+      uniqueMemberCount: state.uniqueMemberCount,
+      adminGroupId: state.adminGroupId,
+      delaySeconds: state.delaySeconds,
+    };
+    fs.writeFileSync(SETTINGS_PATH, JSON.stringify(data, null, 2));
+  } catch (e) {
+    console.error('Failed to save settings:', e.message);
+  }
+}
+
+// Load saved settings into state at startup (if the file exists).
+function loadSettings() {
+  try {
+    if (!fs.existsSync(SETTINGS_PATH)) return;
+    const data = JSON.parse(fs.readFileSync(SETTINGS_PATH, 'utf8'));
+    if (Array.isArray(data.selectedGroups)) state.selectedGroups = data.selectedGroups;
+    if (typeof data.uniqueMemberCount === 'number') state.uniqueMemberCount = data.uniqueMemberCount;
+    if ('adminGroupId' in data) state.adminGroupId = data.adminGroupId;
+    if (typeof data.delaySeconds === 'number') state.delaySeconds = data.delaySeconds;
+    console.log('Loaded saved settings from', SETTINGS_PATH);
+  } catch (e) {
+    console.error('Failed to load settings:', e.message);
+  }
+}
 
 // Remove stale Chromium "Singleton*" lock files left behind when a previous
 // container/process didn't shut down cleanly (e.g. on redeploy). Without this,
@@ -240,6 +274,7 @@ async function broadcastMessage(groups, text, media, mediaType, delayMs) {
 function initClient() {
   if (state.isInitializing || state.isReady) return;
   state.isInitializing = true;
+  loadSettings(); // restore saved group selection & settings from the volume
   clearChromeLocks(AUTH_PATH); // clear stale locks before launching Chromium
   client.initialize();
 }
@@ -248,6 +283,7 @@ module.exports = {
   state,
   client,
   initClient,
+  saveSettings,
   getAllGroups,
   getCachedGroup,
   bulkAction,

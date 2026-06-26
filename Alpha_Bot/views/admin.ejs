@@ -154,16 +154,16 @@
     <!-- ── Schedule Tab ── -->
     <div id="tab-schedule" class="tab-content hidden">
       <div class="card section-card" style="margin-bottom:1.5rem;">
-        <h3>🕐 Schedule a Message (Pakistan Time)</h3>
-        <p class="text-muted">Time is in <strong>PKT (UTC+5)</strong>. Message runs daily at the set time.</p>
+        <h3>🕐 Schedule a One-Time Message (Pakistan Time)</h3>
+        <p class="text-muted">Date &amp; time is in <strong>PKT (UTC+5)</strong>. Message is sent <strong>once</strong> at the chosen date and time.</p>
         <form id="scheduleForm" enctype="multipart/form-data">
           <div class="form-group">
             <label>Label / Name</label>
-            <input type="text" name="label" placeholder="e.g. Morning Update" />
+            <input type="text" name="label" placeholder="e.g. Eid Greeting" />
           </div>
           <div class="form-group">
-            <label>Time (PKT)</label>
-            <input type="time" name="scheduledTime" required />
+            <label>Date &amp; Time (PKT)</label>
+            <input type="datetime-local" name="scheduledDateTime" required />
           </div>
           <div class="form-group">
             <label>Message</label>
@@ -325,7 +325,7 @@
         const r = await fetch('/admin/schedule', { method: 'POST', body: fd });
         const data = await r.json();
         if (data.ok) {
-          toast(`Schedule "${data.label}" added for ${data.scheduledTime} PKT`);
+          toast(`Scheduled "${data.label}" for ${data.scheduledTime} PKT (one-time)`);
           e.target.reset();
           loadSchedules();
         } else {

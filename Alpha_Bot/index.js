@@ -2,13 +2,13 @@ require('dotenv').config();
 const express = require('express');
 const session = require('express-session');
 const multer = require('multer');
-const cron = require('node-cron');
 const path = require('path');
 
 const {
   state,
   client,
   initClient,
+  saveSettings,
   getAllGroups,
   getCachedGroup,
   bulkAction,
@@ -147,6 +147,7 @@ app.post('/groups/select', requireLogin, (req, res) => {
   });
   state.uniqueMemberCount = uniqueMembers.size; // de-duplicated across selected groups
   state.adminGroupId = adminGroupId || null;
+  saveSettings(); // persist selection to the volume so it survives restarts
   res.redirect('/admin');
 });
 
@@ -167,6 +168,7 @@ app.get('/admin', requireLogin, (req, res) => {
 app.post('/admin/delay', requireLogin, (req, res) => {
   const val = parseInt(req.body.delaySeconds, 10);
   if (!isNaN(val) && val >= 0) state.delaySeconds = val;
+  saveSettings(); // persist delay setting
   res.json({ ok: true, delaySeconds: state.delaySeconds });
 });
 
@@ -348,21 +350,23 @@ app.post('/admin/broadcast', requireLogin, upload.single('media'), async (req, r
   }
 });
 
-// ─── Scheduled Messages (Pakistan timezone = UTC+5) ──────────────────────────
-// cron runs in server local time; we convert PKT input to cron expression
+// ─── One-Time Scheduled Messages (Pakistan timezone = UTC+5) ─────────────────
+// Sends the message ONCE at a specific date + time (PKT), then auto-removes.
 app.post('/admin/schedule', requireLogin, upload.single('media'), (req, res) => {
-  const { message, scheduledTime } = req.body; // scheduledTime: "HH:MM" in PKT
-  if (!scheduledTime) return res.json({ ok: false, error: 'Scheduled time is required.' });
+  const { message, scheduledDateTime } = req.body; // "YYYY-MM-DDTHH:MM" in PKT
+  if (!scheduledDateTime) return res.json({ ok: false, error: 'Scheduled date and time are required.' });
 
-  // Convert PKT (UTC+5) to UTC for cron
-  const [hStr, mStr] = scheduledTime.split(':');
-  let hPkt = parseInt(hStr, 10);
-  let mPkt = parseInt(mStr, 10);
+  // Interpret the input as Pakistan time (UTC+5) and convert to a UTC timestamp.
+  // datetime-local has no timezone, so we append +05:00 explicitly.
+  const targetMs = Date.parse(`${scheduledDateTime}:00+05:00`);
+  if (Number.isNaN(targetMs)) {
+    return res.json({ ok: false, error: 'Invalid date/time.' });
+  }
 
-  // PKT -> UTC: subtract 5 hours
-  let hUtc = ((hPkt - 5) + 24) % 24;
-
-  const cronExpr = `${mPkt} ${hUtc} * * *`;
+  const delayMs = targetMs - Date.now();
+  if (delayMs <= 0) {
+    return res.json({ ok: false, error: 'Scheduled time must be in the future.' });
+  }
 
   let media = null;
   let mediaType = null;
@@ -382,32 +386,40 @@ app.post('/admin/schedule', requireLogin, upload.single('media'), (req, res) => 
   }
 
   const id = Date.now().toString();
-  const label = req.body.label || `Schedule ${scheduledTime} PKT`;
+  // Display string in PKT (e.g. "2026-06-30 14:30")
+  const displayTime = scheduledDateTime.replace('T', ' ');
+  const label = req.body.label || `Schedule for ${displayTime} PKT`;
 
-  const job = cron.schedule(cronExpr, async () => {
-    console.log(`Running scheduled message: ${label}`);
-    // Snapshot groups at schedule run time
-    const groups = [...state.selectedGroups];
-    await broadcastMessage(groups, message || '', media, mediaType, effectiveDelay());
-  }, { timezone: 'UTC' });
+  // One-shot timer — fires once, sends, then removes itself from the list.
+  const timer = setTimeout(async () => {
+    console.log(`Running one-time scheduled message: ${label}`);
+    try {
+      const groups = [...state.selectedGroups]; // snapshot at run time
+      await broadcastMessage(groups, message || '', media, mediaType, effectiveDelay());
+    } catch (err) {
+      console.error('Scheduled send failed:', err.message);
+    }
+    // Remove from active list once sent.
+    const i = state.schedules.findIndex((s) => s.id === id);
+    if (i !== -1) state.schedules.splice(i, 1);
+  }, delayMs);
 
   state.schedules.push({
     id,
     label,
-    scheduledTime, // PKT display
-    cronExpr,
+    scheduledTime: displayTime, // PKT display
     message: message || '',
     hasMedia: !!media,
-    job, // cron task reference
+    timer, // setTimeout handle
   });
 
-  res.json({ ok: true, id, label, scheduledTime });
+  res.json({ ok: true, id, label, scheduledTime: displayTime });
 });
 
 app.delete('/admin/schedule/:id', requireLogin, (req, res) => {
   const idx = state.schedules.findIndex((s) => s.id === req.params.id);
   if (idx === -1) return res.json({ ok: false, error: 'Schedule not found.' });
-  state.schedules[idx].job.stop();
+  clearTimeout(state.schedules[idx].timer);
   state.schedules.splice(idx, 1);
   res.json({ ok: true });
 });

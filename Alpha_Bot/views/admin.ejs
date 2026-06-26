@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Alpha Bot — Admin Panel</title>
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+  <%- include('partials/nav') %>
+
+  <div class="container">
+    <div class="page-header">
+      <div>
+        <h2>Admin Panel</h2>
+        <p class="text-muted">Managing <strong><%= selectedGroups.length %></strong> groups
+          &nbsp;·&nbsp; <strong><%= selectedGroups.reduce((sum, g) => sum + (g.memberCount || 0), 0) %></strong> total members
+          &nbsp;·&nbsp; <strong><%= uniqueMemberCount %></strong> unique members
+        </p>
+      </div>
+      <a href="/groups" class="btn btn-outline btn-sm">Change Groups</a>
+    </div>
+
+    <!-- Toast notification -->
+    <div id="toast" class="toast hidden"></div>
+
+    <!-- Delay Setting -->
+    <div class="card section-card" style="margin-bottom:1.5rem;">
+      <h3>⏱ Request Delay</h3>
+      <p class="text-muted">Extra delay between each group action. Default 2s is always added on top.</p>
+      <div class="inline-form">
+        <input type="number" id="delayInput" value="<%= delaySeconds %>" min="0" max="60" style="width:80px;" />
+        <span class="text-muted">seconds extra (total = 2s + this)</span>
+        <button class="btn btn-sm btn-primary" onclick="saveDelay()">Save</button>
+      </div>
+    </div>
+
+    <!-- Tabs -->
+    <div class="tabs">
+      <button class="tab-btn active" onclick="showTab('broadcast')">📢 Broadcast</button>
+      <button class="tab-btn" onclick="showTab('description')">📝 Description</button>
+      <button class="tab-btn" onclick="showTab('subject')">✏️ Group Name</button>
+      <button class="tab-btn" onclick="showTab('dp')">🖼 Group DP</button>
+      <button class="tab-btn" onclick="showTab('permissions')">🔒 Permissions</button>
+      <button class="tab-btn" onclick="showTab('schedule')">🕐 Schedule</button>
+      <button class="tab-btn" onclick="showTab('members')">👤 Members</button>
+    </div>
+
+    <!-- ── Broadcast Tab ── -->
+    <div id="tab-broadcast" class="tab-content active">
+      <div class="card section-card">
+        <h3>📢 Broadcast Message</h3>
+        <p class="text-muted">Send a message, image, video, audio, or file to all selected groups.</p>
+        <form id="broadcastForm" enctype="multipart/form-data">
+          <div class="form-group">
+            <label>Message Text (optional if sending media)</label>
+            <textarea name="message" rows="4" placeholder="Type your message here..."></textarea>
+          </div>
+          <div class="form-group">
+            <label>Attach Media (image, video, audio, document)</label>
+            <input type="file" name="media" accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.xlsx,.zip" />
+          </div>
+          <button type="submit" class="btn btn-primary" id="broadcastBtn">
+            Send to <%= selectedGroups.length %> Groups
+          </button>
+        </form>
+        <div id="broadcastResult" class="result-box hidden"></div>
+      </div>
+    </div>
+
+    <!-- ── Description Tab ── -->
+    <div id="tab-description" class="tab-content hidden">
+      <div class="card section-card">
+        <h3>📝 Update Group Description</h3>
+        <p class="text-muted">Sets the same description for all selected groups.</p>
+        <form id="descForm">
+          <div class="form-group">
+            <label>Description</label>
+            <textarea name="description" rows="4" placeholder="Enter group description..." required></textarea>
+          </div>
+          <button type="submit" class="btn btn-primary">Update <%= selectedGroups.length %> Groups</button>
+        </form>
+        <div id="descResult" class="result-box hidden"></div>
+      </div>
+    </div>
+
+    <!-- ── Subject Tab ── -->
+    <div id="tab-subject" class="tab-content hidden">
+      <div class="card section-card">
+        <h3>✏️ Update Group Name</h3>
+        <p class="text-muted">Sets the same name/subject for all selected groups.</p>
+        <form id="subjectForm">
+          <div class="form-group">
+            <label>Group Name</label>
+            <input type="text" name="subject" placeholder="Enter new group name..." required />
+          </div>
+          <button type="submit" class="btn btn-primary">Update <%= selectedGroups.length %> Groups</button>
+        </form>
+        <div id="subjectResult" class="result-box hidden"></div>
+      </div>
+    </div>
+
+    <!-- ── DP Tab ── -->
+    <div id="tab-dp" class="tab-content hidden">
+      <div class="card section-card">
+        <h3>🖼 Update Group Profile Picture</h3>
+        <p class="text-muted">Upload an image to set as DP for all selected groups.</p>
+        <form id="dpForm" enctype="multipart/form-data">
+          <div class="form-group">
+            <label>Select Image</label>
+            <input type="file" name="dp" accept="image/*" required />
+          </div>
+          <div id="dpPreview" style="margin-bottom:1rem;"></div>
+          <button type="submit" class="btn btn-primary">Update DP for <%= selectedGroups.length %> Groups</button>
+        </form>
+        <div id="dpResult" class="result-box hidden"></div>
+      </div>
+    </div>
+
+    <!-- ── Permissions Tab ── -->
+    <div id="tab-permissions" class="tab-content hidden">
+      <div class="card section-card">
+        <h3>🔒 Update Group Permissions</h3>
+        <p class="text-muted">Control who can send messages and change group info.</p>
+        <form id="permForm">
+          <div class="form-group">
+            <label class="toggle-label">
+              <span>Only Admins can send messages</span>
+              <div class="toggle-wrap">
+                <select name="messagesAdminsOnly" class="select-input" style="width:auto;">
+                  <option value="true">Admins Only</option>
+                  <option value="false">Everyone</option>
+                </select>
+              </div>
+            </label>
+          </div>
+          <div class="form-group">
+            <label class="toggle-label">
+              <span>Only Admins can edit group info</span>
+              <div class="toggle-wrap">
+                <select name="infoAdminsOnly" class="select-input" style="width:auto;">
+                  <option value="true">Admins Only</option>
+                  <option value="false">Everyone</option>
+                </select>
+              </div>
+            </label>
+          </div>
+          <button type="submit" class="btn btn-primary">Apply to <%= selectedGroups.length %> Groups</button>
+        </form>
+        <div id="permResult" class="result-box hidden"></div>
+      </div>
+    </div>
+
+    <!-- ── Schedule Tab ── -->
+    <div id="tab-schedule" class="tab-content hidden">
+      <div class="card section-card" style="margin-bottom:1.5rem;">
+        <h3>🕐 Schedule a Message (Pakistan Time)</h3>
+        <p class="text-muted">Time is in <strong>PKT (UTC+5)</strong>. Message runs daily at the set time.</p>
+        <form id="scheduleForm" enctype="multipart/form-data">
+          <div class="form-group">
+            <label>Label / Name</label>
+            <input type="text" name="label" placeholder="e.g. Morning Update" />
+          </div>
+          <div class="form-group">
+            <label>Time (PKT)</label>
+            <input type="time" name="scheduledTime" required />
+          </div>
+          <div class="form-group">
+            <label>Message</label>
+            <textarea name="message" rows="3" placeholder="Message text..."></textarea>
+          </div>
+          <div class="form-group">
+            <label>Attach Media (optional)</label>
+            <input type="file" name="media" accept="image/*,video/*,audio/*,.pdf,.doc,.docx" />
+          </div>
+          <button type="submit" class="btn btn-primary">Add Schedule</button>
+        </form>
+      </div>
+
+      <!-- Existing schedules -->
+      <div class="card section-card">
+        <h3>Active Schedules</h3>
+        <div id="scheduleList">
+          <% if (schedules.length === 0) { %>
+            <p class="text-muted">No schedules yet.</p>
+          <% } else { %>
+            <% schedules.forEach(s => { %>
+              <div class="schedule-item" id="sched-<%= s.id %>">
+                <div>
+                  <strong><%= s.label %></strong>
+                  <span class="badge badge-info"><%= s.scheduledTime %> PKT</span>
+                  <% if (s.hasMedia) { %><span class="badge">📎 Media</span><% } %>
+                  <p class="text-muted" style="margin:0.25rem 0 0;font-size:.85rem;"><%= s.message.substring(0, 80) %><%= s.message.length > 80 ? '...' : '' %></p>
+                </div>
+                <button class="btn btn-sm btn-danger" onclick="deleteSchedule('<%= s.id %>')">Delete</button>
+              </div>
+            <% }); %>
+          <% } %>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Members Tab ── -->
+    <div id="tab-members" class="tab-content hidden">
+      <div class="card section-card" style="margin-bottom:1.5rem;">
+        <h3>👤 Member Management</h3>
+        <p class="text-muted">Enter a phone number with country code (e.g. <strong>923001234567</strong>). All actions apply to all selected groups.</p>
+
+        <div class="form-group" style="margin-top:1.25rem;">
+          <label>Phone Number (with country code, no + or spaces)</label>
+          <input type="text" id="memberPhone" placeholder="e.g. 923001234567" style="max-width:320px;" />
+        </div>
+
+        <div class="btn-group" style="flex-wrap:wrap;gap:.75rem;margin-top:1rem;">
+          <button class="btn btn-primary" onclick="memberAction('/admin/add-member', 'addResult')">
+            ➕ Add to All Groups
+          </button>
+          <button class="btn btn-primary" style="background:#8b5cf6;" onclick="memberAction('/admin/make-admin', 'addResult')">
+            ⭐ Make Admin in All Groups
+          </button>
+          <button class="btn btn-outline" onclick="memberAction('/admin/remove-admin', 'addResult')">
+            🔽 Remove Admin in All Groups
+          </button>
+          <button class="btn btn-danger" onclick="memberAction('/admin/remove-member', 'addResult')">
+            ➖ Remove from All Groups
+          </button>
+        </div>
+
+        <div id="addResult" class="result-box hidden" style="margin-top:1.25rem;"></div>
+      </div>
+    </div>
+
+    <!-- Selected Groups Sidebar -->
+    <div class="card section-card" style="margin-top:2rem;">
+      <details>
+        <summary style="cursor:pointer;font-weight:600;">👥 Selected Groups (<%= selectedGroups.length %>)
+          <% if (adminGroupId) { %><span class="badge badge-info" style="margin-left:.5rem;">Admin Group Set</span><% } %>
+        </summary>
+        <div class="group-chips" style="margin-top:1rem;">
+          <% selectedGroups.forEach(g => { %>
+            <span class="chip <%= (adminGroupId === g.id) ? 'chip-admin' : '' %>">
+              <%= g.name %> <%= (adminGroupId === g.id) ? '📢' : '' %>
+            </span>
+          <% }); %>
+        </div>
+      </details>
+    </div>
+  </div>
+
+  <script>
+    // ── Tab switching
+    function showTab(name) {
+      document.querySelectorAll('.tab-content').forEach(el => el.classList.add('hidden'));
+      document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
+      document.getElementById('tab-' + name).classList.remove('hidden');
+      event.target.classList.add('active');
+    }
+
+    // ── Toast
+    function toast(msg, ok = true) {
+      const el = document.getElementById('toast');
+      el.textContent = msg;
+      el.className = 'toast ' + (ok ? 'toast-ok' : 'toast-err');
+      setTimeout(() => el.classList.add('hidden'), 4000);
+    }
+
+    // ── Result rendering
+    function showResults(containerId, results) {
+      const el = document.getElementById(containerId);
+      if (!results || !results.length) { el.classList.add('hidden'); return; }
+      const ok = results.filter(r => r.ok).length;
+      const fail = results.filter(r => !r.ok).length;
+      let html = `<p><strong>${ok} succeeded</strong>${fail ? `, <span style="color:var(--danger)">${fail} failed</span>` : ''}.</p><ul>`;
+      results.forEach(r => {
+        html += `<li class="${r.ok ? '' : 'text-danger'}">
+          ${r.ok ? '✅' : '❌'} ${r.name}${r.error ? ': ' + r.error : ''}
+        </li>`;
+      });
+      html += '</ul>';
+      el.innerHTML = html;
+      el.classList.remove('hidden');
+    }
+
+    // ── Generic form submit
+    function submitForm(formId, endpoint, resultId, btnId) {
+      const form = document.getElementById(formId);
+      form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const btn = btnId ? document.getElementById(btnId) : form.querySelector('[type=submit]');
+        const orig = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = 'Processing...';
+        try {
+          const fd = new FormData(form);
+          const r = await fetch(endpoint, { method: 'POST', body: fd });
+          const data = await r.json();
+          if (data.ok) {
+            toast(`Done! Check results below.`);
+            if (resultId) showResults(resultId, data.results);
+          } else {
+            toast(data.error || 'Something went wrong.', false);
+          }
+        } catch (err) {
+          toast('Request failed: ' + err.message, false);
+        } finally {
+          btn.disabled = false;
+          btn.textContent = orig;
+        }
+      });
+    }
+
+    submitForm('broadcastForm', '/admin/broadcast', 'broadcastResult');
+    submitForm('descForm', '/admin/update-description', 'descResult');
+    submitForm('subjectForm', '/admin/update-subject', 'subjectResult');
+    submitForm('dpForm', '/admin/update-dp', 'dpResult');
+    submitForm('permForm', '/admin/update-permissions', 'permResult');
+
+    // ── Schedule form
+    document.getElementById('scheduleForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const btn = e.target.querySelector('[type=submit]');
+      btn.disabled = true; btn.textContent = 'Adding...';
+      try {
+        const fd = new FormData(e.target);
+        const r = await fetch('/admin/schedule', { method: 'POST', body: fd });
+        const data = await r.json();
+        if (data.ok) {
+          toast(`Schedule "${data.label}" added for ${data.scheduledTime} PKT`);
+          e.target.reset();
+          loadSchedules();
+        } else {
+          toast(data.error || 'Failed.', false);
+        }
+      } finally {
+        btn.disabled = false; btn.textContent = 'Add Schedule';
+      }
+    });
+
+    async function deleteSchedule(id) {
+      if (!confirm('Delete this schedule?')) return;
+      const r = await fetch('/admin/schedule/' + id, { method: 'DELETE' });
+      const data = await r.json();
+      if (data.ok) {
+        document.getElementById('sched-' + id)?.remove();
+        toast('Schedule deleted.');
+      }
+    }
+
+    async function loadSchedules() {
+      const r = await fetch('/admin/schedules');
+      const list = await r.json();
+      const container = document.getElementById('scheduleList');
+      if (!list.length) { container.innerHTML = '<p class="text-muted">No schedules yet.</p>'; return; }
+      container.innerHTML = list.map(s => `
+        <div class="schedule-item" id="sched-${s.id}">
+          <div>
+            <strong>${s.label}</strong>
+            <span class="badge badge-info">${s.scheduledTime} PKT</span>
+            ${s.hasMedia ? '<span class="badge">📎 Media</span>' : ''}
+            <p class="text-muted" style="margin:.25rem 0 0;font-size:.85rem;">${(s.message || '').substring(0,80)}${s.message?.length > 80 ? '...' : ''}</p>
+          </div>
+          <button class="btn btn-sm btn-danger" onclick="deleteSchedule('${s.id}')">Delete</button>
+        </div>
+      `).join('');
+    }
+
+    // ── Delay
+    async function saveDelay() {
+      const val = document.getElementById('delayInput').value;
+      const r = await fetch('/admin/delay', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ delaySeconds: val }),
+      });
+      const data = await r.json();
+      if (data.ok) toast(`Delay set to ${data.delaySeconds}s extra.`);
+    }
+
+    // ── Member actions
+    async function memberAction(endpoint, resultId) {
+      const phone = document.getElementById('memberPhone').value.trim();
+      if (!phone) { toast('Enter a phone number first.', false); return; }
+
+      const btn = event.target;
+      const orig = btn.textContent;
+      btn.disabled = true; btn.textContent = 'Processing...';
+      try {
+        const fd = new FormData();
+        fd.append('phone', phone);
+        const r = await fetch(endpoint, { method: 'POST', body: fd });
+        const data = await r.json();
+        if (data.ok) {
+          toast('Done! Check results below.');
+          showResults(resultId, data.results);
+        } else {
+          toast(data.error || 'Something went wrong.', false);
+        }
+      } catch (err) {
+        toast('Request failed: ' + err.message, false);
+      } finally {
+        btn.disabled = false; btn.textContent = orig;
+      }
+    }
+
+    // ── DP preview
+    document.querySelector('input[name=dp]')?.addEventListener('change', function () {
+      const file = this.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = e => {
+        document.getElementById('dpPreview').innerHTML =
+          `<img src="${e.target.result}" style="max-width:180px;border-radius:50%;border:3px solid var(--primary);" />`;
+      };
+      reader.readAsDataURL(file);
+    });
+  </script>
+</body>
+</html>

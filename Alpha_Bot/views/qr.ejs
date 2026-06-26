@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Alpha Bot — Scan QR</title>
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body class="center-page">
+  <div class="card text-center" style="max-width:420px;">
+    <h2>Scan QR Code</h2>
+    <p class="text-muted">Open WhatsApp → Linked Devices → Link a Device</p>
+    <div class="qr-wrap">
+      <img src="<%= qrCode %>" alt="QR Code" />
+    </div>
+    <p class="text-muted" style="margin-top:1rem;font-size:.85rem;">
+      QR refreshes automatically. Keep this page open.
+    </p>
+  </div>
+
+  <script>
+    // Poll until connected, then redirect
+    const poll = setInterval(async () => {
+      const r = await fetch('/api/status');
+      const data = await r.json();
+      if (data.isReady) {
+        clearInterval(poll);
+        window.location.href = '/groups';
+      } else if (data.hasQr && data.qrCode) {
+        document.querySelector('.qr-wrap img').src = data.qrCode;
+      }
+    }, 3000);
+  </script>
+</body>
+</html>

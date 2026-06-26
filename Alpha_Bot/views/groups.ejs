@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Alpha Bot — Select Groups</title>
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+  <%- include('partials/nav') %>
+
+  <div class="container">
+    <div class="page-header">
+      <h2>Select Groups to Manage</h2>
+      <p class="text-muted">Choose which groups this bot will manage. Also pick the Admin Source Group.</p>
+    </div>
+
+    <form method="POST" action="/groups/select" id="groupForm">
+      <!-- Search filter -->
+      <div class="form-group" style="max-width:360px;margin-bottom:1.5rem;">
+        <input type="text" id="searchInput" placeholder="Search groups..." class="search-input" />
+      </div>
+
+      <!-- Admin Group Selection -->
+      <div class="card section-card" style="margin-bottom:1.5rem;">
+        <h3 style="margin-bottom:1rem;">📢 Admin Source Group <span class="badge badge-info">Auto-Forward</span></h3>
+        <p class="text-muted" style="margin-bottom:1rem;">Messages sent in this group will be auto-forwarded to all selected groups.</p>
+        <select name="adminGroupId" class="select-input">
+          <option value="">— None —</option>
+          <% allGroups.forEach(g => { %>
+            <option value="<%= g.id %>" <%= (adminGroupId === g.id) ? 'selected' : '' %>>
+              <%= g.name %>
+            </option>
+          <% }); %>
+        </select>
+      </div>
+
+      <!-- Group List -->
+      <div class="card section-card">
+        <div class="section-header">
+          <h3>Groups (<%= allGroups.length %> total)</h3>
+          <div class="btn-group">
+            <button type="button" class="btn btn-sm btn-outline" onclick="selectAll()">Select All</button>
+            <button type="button" class="btn btn-sm btn-outline" onclick="clearAll()">Clear All</button>
+          </div>
+        </div>
+
+        <div class="group-grid" id="groupList">
+          <% allGroups.forEach((g, i) => {
+            const isSelected = selectedGroups.some(s => s.id === g.id);
+          %>
+          <label class="group-item <%= isSelected ? 'checked' : '' %>" data-name="<%= g.name.toLowerCase() %>" data-members="<%= g.memberCount %>">
+            <input type="checkbox" name="groupIds" value="<%= g.id %>"
+              data-members="<%= g.memberCount %>"
+              data-memberids="<%= Buffer.from(JSON.stringify(g.memberIds || [])).toString('base64') %>"
+              <%= isSelected ? 'checked' : '' %> onchange="toggleCard(this);" />
+            <span class="group-icon">👥</span>
+            <span class="group-name"><%= g.name %>
+              <small style="display:block;font-weight:400;opacity:0.7;">👤 <%= g.memberCount %> members</small>
+            </span>
+            <span class="checkmark">✓</span>
+          </label>
+          <% }); %>
+        </div>
+
+        <div class="selected-count" id="selCount">
+          <span id="countNum"><%= selectedGroups.length %></span> groups selected
+          &nbsp;·&nbsp; <span id="memberTotal">0</span> total members
+          &nbsp;·&nbsp; <span id="uniqueTotal">0</span> unique members
+        </div>
+      </div>
+
+      <div style="margin-top:1.5rem;display:flex;gap:1rem;">
+        <button type="submit" class="btn btn-primary">Save & Go to Admin Panel →</button>
+      </div>
+    </form>
+  </div>
+
+  <script>
+    // Only group ids are submitted; names/counts/member-ids are looked up
+    // server-side from cache. data-* attrs below are used only for the live
+    // browser counts and are NOT sent in the form.
+    function toggleCard(cb) {
+      const label = cb.closest('label');
+      label.classList.toggle('checked', cb.checked);
+      updateCount();
+    }
+
+    function selectAll() {
+      document.querySelectorAll('#groupList input[type=checkbox]').forEach(cb => {
+        cb.checked = true;
+        cb.closest('label').classList.add('checked');
+      });
+      updateCount();
+    }
+
+    function clearAll() {
+      document.querySelectorAll('#groupList input[type=checkbox]').forEach(cb => {
+        cb.checked = false;
+        cb.closest('label').classList.remove('checked');
+      });
+      updateCount();
+    }
+
+    function updateCount() {
+      const checked = document.querySelectorAll('#groupList input[type=checkbox]:checked');
+      let members = 0;
+      const uniqueIds = new Set();
+      checked.forEach(cb => {
+        members += parseInt(cb.dataset.members, 10) || 0;
+        try {
+          const ids = JSON.parse(atob(cb.dataset.memberids || ''));
+          ids.forEach(id => uniqueIds.add(id));
+        } catch (e) { /* ignore malformed */ }
+      });
+      document.getElementById('countNum').textContent = checked.length;
+      document.getElementById('memberTotal').textContent = members;
+      document.getElementById('uniqueTotal').textContent = uniqueIds.size;
+    }
+
+    // initialize totals on page load (for already-selected groups)
+    updateCount();
+
+    document.getElementById('searchInput').addEventListener('input', function () {
+      const q = this.value.toLowerCase();
+      document.querySelectorAll('.group-item').forEach(el => {
+        el.style.display = el.dataset.name.includes(q) ? '' : 'none';
+      });
+    });
+  </script>
+</body>
+</html>

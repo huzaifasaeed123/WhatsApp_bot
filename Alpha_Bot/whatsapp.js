@@ -1,5 +1,34 @@
 const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
 const qrcode = require('qrcode');
+const fs = require('fs');
+const path = require('path');
+
+const AUTH_PATH = './.wwebjs_auth';
+
+// Remove stale Chromium "Singleton*" lock files left behind when a previous
+// container/process didn't shut down cleanly (e.g. on redeploy). Without this,
+// Chromium refuses to launch with "profile appears to be in use".
+function clearChromeLocks(dir) {
+  try {
+    for (const entry of fs.readdirSync(dir)) {
+      const full = path.join(dir, entry);
+      let stat;
+      try { stat = fs.lstatSync(full); } catch { continue; }
+      if (stat.isDirectory()) {
+        clearChromeLocks(full); // recurse — lock files live in session subfolders
+      } else if (entry.startsWith('Singleton')) {
+        try {
+          fs.rmSync(full, { force: true });
+          console.log('Removed stale Chromium lock:', full);
+        } catch (e) {
+          console.error('Could not remove lock', full, e.message);
+        }
+      }
+    }
+  } catch (e) {
+    // Auth dir may not exist yet on first run — that's fine.
+  }
+}
 
 // Shared state accessible by routes
 const state = {
@@ -14,7 +43,7 @@ const state = {
 };
 
 const client = new Client({
-  authStrategy: new LocalAuth({ dataPath: './.wwebjs_auth' }),
+  authStrategy: new LocalAuth({ dataPath: AUTH_PATH }),
   authTimeoutMs: 0, // disable auth timeout — wait as long as needed for QR scan
   puppeteer: {
     headless: true,
@@ -66,6 +95,7 @@ client.on('disconnected', (reason) => {
   // Wait for Chrome to release file locks, then reinitialize
   setTimeout(() => {
     console.log('Reinitializing WhatsApp client...');
+    clearChromeLocks(AUTH_PATH); // clear stale locks before relaunching Chromium
     client.initialize().catch((err) => {
       console.error('Reinitialization failed:', err.message);
     });
@@ -210,6 +240,7 @@ async function broadcastMessage(groups, text, media, mediaType, delayMs) {
 function initClient() {
   if (state.isInitializing || state.isReady) return;
   state.isInitializing = true;
+  clearChromeLocks(AUTH_PATH); // clear stale locks before launching Chromium
   client.initialize();
 }
 

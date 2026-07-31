@@ -134,13 +134,61 @@ client.on('ready', async () => {
     const chats = await client.getChats();
     console.log(`Chat store OK — ${chats.length} chats, web version ${WEB_VERSION}.`);
   } catch (err) {
-    console.error(
-      `Chat store UNAVAILABLE on web version ${WEB_VERSION}: ${err.message}\n` +
-      'WhatsApp Web likely changed its internal modules. Try another build via ' +
-      'the WA_WEB_VERSION env var, or upgrade whatsapp-web.js.'
-    );
+    console.error(`Chat store UNAVAILABLE on web version ${WEB_VERSION}: ${err.message}`);
+    await diagnoseStore();
   }
 });
+
+// Puppeteer serialises a page-side Error down to its (minified) .name, which is
+// why these failures only ever show up as "r". Re-run the same lookups inside
+// the page and hand back plain strings so the real message and stack survive.
+async function diagnoseStore() {
+  try {
+    const report = await client.pupPage.evaluate(async () => {
+      const out = {
+        actualWebVersion: window.Debug?.VERSION || 'unknown',
+        hasRequire: typeof window.require === 'function',
+        hasWWebJS: typeof window.WWebJS !== 'undefined',
+        modules: {},
+        chatsError: null,
+      };
+
+      for (const name of [
+        'WAWebCollections',
+        'WAWebChatGetters',
+        'WAWebWidFactory',
+        'WAWebFindChatAction',
+      ]) {
+        try {
+          const mod = window.require(name);
+          out.modules[name] = mod ? `ok (keys: ${Object.keys(mod).slice(0, 6).join(',')})` : 'resolved to null/undefined';
+        } catch (e) {
+          out.modules[name] = `THREW ${e.name}: ${e.message}`;
+        }
+      }
+
+      try {
+        await window.WWebJS.getChats();
+        out.chatsError = 'none — getChats() succeeded here';
+      } catch (e) {
+        out.chatsError = `${e.name}: ${e.message}\n${e.stack}`;
+      }
+
+      return out;
+    });
+
+    console.error('─── Store diagnostic ───');
+    console.error('Actual WhatsApp Web version in page:', report.actualWebVersion);
+    console.error('window.require present:', report.hasRequire, '| window.WWebJS present:', report.hasWWebJS);
+    for (const [name, status] of Object.entries(report.modules)) {
+      console.error(`  ${name}: ${status}`);
+    }
+    console.error('getChats() inside page:', report.chatsError);
+    console.error('────────────────────────');
+  } catch (e) {
+    console.error('Diagnostic itself failed:', e.message);
+  }
+}
 
 client.on('authenticated', () => {
   console.log('WhatsApp authenticated.');

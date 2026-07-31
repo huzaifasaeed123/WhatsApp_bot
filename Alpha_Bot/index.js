@@ -132,8 +132,9 @@ app.get('/groups', requireLogin, async (req, res) => {
     if (err.message.length < 20) {
       return res.render('error', {
         message:
-          'WhatsApp Web changed its internal layout and this bot version cannot read it. ' +
-          'Set the WA_WEB_VERSION env var to a different build, or upgrade whatsapp-web.js. ' +
+          'WhatsApp Web renamed an internal property (_serialized to $1) and this ' +
+          'whatsapp-web.js version cannot read it. The compatibility shim did not take ' +
+          'effect — check the server logs, and see whatsapp-web.js issue #201862. ' +
           `(underlying error: "${err.message}")`,
       });
     }

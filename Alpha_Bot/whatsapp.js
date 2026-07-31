@@ -76,23 +76,15 @@ const state = {
   delaySeconds: 3,      // admin-configurable extra delay between group actions
 };
 
-// whatsapp-web.js reaches into WhatsApp Web's internal webpack modules by name
-// (window.require('WAWebCollections'), etc). When WhatsApp ships a new web build
-// those names change, every such lookup throws a minified error ("r"), and the
-// library breaks until it catches up. Pinning to an archived build that the
-// installed library version understands avoids riding whatever WhatsApp ships
-// today. Bump WEB_VERSION once whatsapp-web.js supports a newer build.
-// Override with the WA_WEB_VERSION env var to try another build without a code
-// change. Available builds: github.com/wppconnect-team/wa-version/tree/main/html
-const WEB_VERSION = process.env.WA_WEB_VERSION || '2.3000.1044261014-alpha';
+// WhatsApp Web's July 2026 update minified the WID property `_serialized` to
+// `$1`. whatsapp-web.js reads `id._serialized` throughout, so it now gets
+// undefined and throws minified errors ("r") out of the page bundle. Pinning a
+// web version does NOT help — every current build carries the rename. The fix
+// is the shim installed below (see installSerializedShim).
+// Upstream: wwebjs/whatsapp-web.js#201862, PR #201871 (unmerged as of Aug 2026).
 
 const client = new Client({
   authStrategy: new LocalAuth({ dataPath: AUTH_PATH }),
-  webVersion: WEB_VERSION,
-  webVersionCache: {
-    type: 'remote',
-    remotePath: `https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/${WEB_VERSION}.html`,
-  },
   authTimeoutMs: 0, // disable auth timeout — wait as long as needed for QR scan
   puppeteer: {
     headless: true,
@@ -121,20 +113,64 @@ client.on('qr', async (qr) => {
   console.log('QR code ready — scan it on the admin panel.');
 });
 
+// Restore `_serialized` on the WID/MsgKey prototypes as a getter aliasing the
+// new `$1` property. Defining it on the prototype (rather than rewriting keys)
+// leaves the underlying objects untouched, which matters because WhatsApp uses
+// them for E2E decryption. Safe to run repeatedly: it no-ops when `_serialized`
+// already exists, so an older web build is unaffected.
+async function installSerializedShim() {
+  try {
+    const result = await client.pupPage.evaluate(() => {
+      const patched = [];
+      const candidates = [
+        ['MsgKey', 'WAWebMsgKey'],
+        ['Wid', 'WAWebWid'],
+      ];
+
+      for (const [label, moduleName] of candidates) {
+        let proto;
+        try {
+          const mod = window.require(moduleName);
+          proto = (mod?.default || mod?.[label] || mod)?.prototype;
+        } catch { continue; }
+
+        if (proto && !('_serialized' in proto)) {
+          Object.defineProperty(proto, '_serialized', {
+            get() { return this.$1; },
+            configurable: true,
+          });
+          patched.push(label);
+        }
+      }
+      return { patched, version: window.Debug?.VERSION || 'unknown' };
+    });
+
+    console.log(
+      result.patched.length
+        ? `Applied _serialized→$1 shim to: ${result.patched.join(', ')} (WA Web ${result.version}).`
+        : `No _serialized shim needed (WA Web ${result.version}).`
+    );
+  } catch (err) {
+    console.error('Could not install _serialized shim:', err.message);
+  }
+}
+
 client.on('ready', async () => {
   state.qrCodeDataUrl = null;
-  state.isReady = true;
   console.log('WhatsApp client is ready.');
 
-  // Smoke-test the injected module lookups once. If WhatsApp has shipped a web
-  // build this library version doesn't understand, every getChats()/sendMessage
-  // fails with a minified error and the bot is effectively dead — better to say
-  // so loudly at startup than to surface it later as an unexplained "r".
+  await installSerializedShim();
+
+  // Verify the store actually works before serving requests. If this fails the
+  // bot cannot do anything useful, so say so loudly rather than letting it
+  // surface later as an unexplained "r".
   try {
     const chats = await client.getChats();
-    console.log(`Chat store OK — ${chats.length} chats, web version ${WEB_VERSION}.`);
+    state.isReady = true;
+    console.log(`Chat store OK — ${chats.length} chats.`);
   } catch (err) {
-    console.error(`Chat store UNAVAILABLE on web version ${WEB_VERSION}: ${err.message}`);
+    state.isReady = true; // still allow the UI in, routes report the failure
+    console.error(`Chat store UNAVAILABLE: ${err.message}`);
     await diagnoseStore();
   }
 });
@@ -151,7 +187,18 @@ async function diagnoseStore() {
         hasWWebJS: typeof window.WWebJS !== 'undefined',
         modules: {},
         chatsError: null,
+        widShape: 'unknown',
       };
+
+      // Confirm whether this build carries the _serialized→$1 rename.
+      try {
+        const wid = window.require('WAWebWidFactory').createWid('0@c.us');
+        out.widShape =
+          `_serialized=${typeof wid._serialized} $1=${typeof wid.$1} ` +
+          `keys=[${Object.keys(wid).slice(0, 8).join(',')}]`;
+      } catch (e) {
+        out.widShape = `probe threw ${e.name}: ${e.message}`;
+      }
 
       for (const name of [
         'WAWebCollections',
@@ -180,6 +227,7 @@ async function diagnoseStore() {
     console.error('─── Store diagnostic ───');
     console.error('Actual WhatsApp Web version in page:', report.actualWebVersion);
     console.error('window.require present:', report.hasRequire, '| window.WWebJS present:', report.hasWWebJS);
+    console.error('WID shape:', report.widShape);
     for (const [name, status] of Object.entries(report.modules)) {
       console.error(`  ${name}: ${status}`);
     }

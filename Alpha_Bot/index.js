@@ -102,14 +102,13 @@ app.get('/groups', requireLogin, async (req, res) => {
     try {
       allGroups = await getAllGroups();
     } catch (err) {
-      // "Detached frame" means WhatsApp Web reloaded its page mid-request.
-      // Wait a moment for the frame to re-attach and retry once.
-      if (/detached frame/i.test(err.message)) {
-        await new Promise((r) => setTimeout(r, 1500));
-        allGroups = await getAllGroups();
-      } else {
-        throw err;
-      }
+      // Errors thrown inside WhatsApp Web's own minified bundle arrive with
+      // useless one-character messages ("r"), so match on nothing and just
+      // retry once — the common causes (page reloading, chat store not yet
+      // synced after a restart) all resolve on their own within seconds.
+      console.error('getAllGroups failed, retrying:', err.stack || err.message);
+      await new Promise((r) => setTimeout(r, 3000));
+      allGroups = await getAllGroups();
     }
     res.render('groups', {
       allGroups,
@@ -117,9 +116,19 @@ app.get('/groups', requireLogin, async (req, res) => {
       adminGroupId: state.adminGroupId,
     });
   } catch (err) {
-    // If the frame is still detached, the session is unstable — send the
-    // user back to the QR/home screen rather than a dead error page.
-    if (/detached frame|session closed|target closed/i.test(err.message)) {
+    // Log the full stack — err.message alone is frequently a minified symbol
+    // that says nothing about what actually went wrong.
+    console.error('/groups failed:', err.stack || err.message);
+
+    // A short/minified message means the failure came from inside the page
+    // bundle rather than our code, which in practice means the session isn't
+    // usable yet. Send the user home to re-check status instead of showing a
+    // dead-end error page.
+    if (
+      /detached frame|session closed|target closed|execution context/i.test(err.message) ||
+      err.message.length < 20
+    ) {
+      state.isReady = false; // force the home page to re-evaluate the session
       return res.redirect('/');
     }
     res.render('error', { message: err.message });

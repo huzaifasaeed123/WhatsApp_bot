@@ -106,10 +106,30 @@ client.on('qr', async (qr) => {
   console.log('QR code ready — scan it on the admin panel.');
 });
 
-client.on('ready', () => {
-  state.isReady = true;
+client.on('ready', async () => {
   state.qrCodeDataUrl = null;
-  console.log('WhatsApp client is ready.');
+  console.log('WhatsApp client is ready — verifying chat store...');
+
+  // 'ready' can fire before WhatsApp Web has finished syncing its chat store,
+  // especially after a redeploy restores an existing session. Marking the
+  // client ready at that point lets requests through to getChats(), which
+  // throws a minified error from inside the page bundle. Poll until a real
+  // getChats() succeeds before flipping the flag.
+  for (let attempt = 1; attempt <= 10; attempt++) {
+    try {
+      await client.getChats();
+      state.isReady = true;
+      console.log(`Chat store ready (attempt ${attempt}).`);
+      return;
+    } catch (err) {
+      console.log(`Chat store not ready (attempt ${attempt}):`, err.message);
+      await sleep(3000);
+    }
+  }
+
+  // Let it through anyway rather than hanging forever; routes handle failures.
+  state.isReady = true;
+  console.warn('Proceeding without a confirmed chat store.');
 });
 
 client.on('authenticated', () => {
@@ -145,12 +165,25 @@ process.on('uncaughtException', (err) => {
   console.error('Uncaught exception (ignored):', err.message);
 });
 
+// Guards against overlapping forward loops. A full pass over ~80 groups takes
+// several minutes, so without this a busy admin group starts multiple loops
+// that interleave on the single Puppeteer page.
+let forwardInProgress = false;
+
 // Auto-forward listener: messages arriving in the admin source group
 client.on('message', async (message) => {
   if (!state.adminGroupId) return;
   if (message.from !== state.adminGroupId) return;
   if (state.selectedGroups.length === 0) return;
 
+  if (forwardInProgress) {
+    console.warn('Forward already running — skipping this message.');
+    return;
+  }
+  forwardInProgress = true;
+
+  let sent = 0;
+  let failed = 0;
   try {
     let media = null;
     if (message.hasMedia) {
@@ -159,12 +192,28 @@ client.on('message', async (message) => {
 
     for (const group of state.selectedGroups) {
       if (group.id === state.adminGroupId) continue; // don't echo back
-      await sendToGroup(group.id, message.body, media, message.type);
+
+      // The client can disconnect and reinitialize mid-loop; sending into the
+      // destroyed page throws a minified error ("r") once per remaining group.
+      if (!state.isReady) {
+        console.warn(`Client not ready — aborting forward after ${sent} groups.`);
+        break;
+      }
+
+      try {
+        await sendToGroup(group.id, message.body, media, message.type);
+        sent++;
+      } catch (err) {
+        failed++;
+        console.error(`Failed to forward to ${group.name || group.id}:`, err.message);
+      }
       await sleep(2000 + state.delaySeconds * 1000);
     }
-    console.log(`Auto-forwarded message to ${state.selectedGroups.length} groups.`);
+    console.log(`Auto-forward complete: ${sent} sent, ${failed} failed.`);
   } catch (err) {
     console.error('Auto-forward error:', err.message);
+  } finally {
+    forwardInProgress = false;
   }
 });
 

@@ -76,8 +76,23 @@ const state = {
   delaySeconds: 3,      // admin-configurable extra delay between group actions
 };
 
+// whatsapp-web.js reaches into WhatsApp Web's internal webpack modules by name
+// (window.require('WAWebCollections'), etc). When WhatsApp ships a new web build
+// those names change, every such lookup throws a minified error ("r"), and the
+// library breaks until it catches up. Pinning to an archived build that the
+// installed library version understands avoids riding whatever WhatsApp ships
+// today. Bump WEB_VERSION once whatsapp-web.js supports a newer build.
+// Override with the WA_WEB_VERSION env var to try another build without a code
+// change. Available builds: github.com/wppconnect-team/wa-version/tree/main/html
+const WEB_VERSION = process.env.WA_WEB_VERSION || '2.3000.1044261014-alpha';
+
 const client = new Client({
   authStrategy: new LocalAuth({ dataPath: AUTH_PATH }),
+  webVersion: WEB_VERSION,
+  webVersionCache: {
+    type: 'remote',
+    remotePath: `https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/${WEB_VERSION}.html`,
+  },
   authTimeoutMs: 0, // disable auth timeout — wait as long as needed for QR scan
   puppeteer: {
     headless: true,
@@ -108,28 +123,23 @@ client.on('qr', async (qr) => {
 
 client.on('ready', async () => {
   state.qrCodeDataUrl = null;
-  console.log('WhatsApp client is ready — verifying chat store...');
-
-  // 'ready' can fire before WhatsApp Web has finished syncing its chat store,
-  // especially after a redeploy restores an existing session. Marking the
-  // client ready at that point lets requests through to getChats(), which
-  // throws a minified error from inside the page bundle. Poll until a real
-  // getChats() succeeds before flipping the flag.
-  for (let attempt = 1; attempt <= 10; attempt++) {
-    try {
-      await client.getChats();
-      state.isReady = true;
-      console.log(`Chat store ready (attempt ${attempt}).`);
-      return;
-    } catch (err) {
-      console.log(`Chat store not ready (attempt ${attempt}):`, err.message);
-      await sleep(3000);
-    }
-  }
-
-  // Let it through anyway rather than hanging forever; routes handle failures.
   state.isReady = true;
-  console.warn('Proceeding without a confirmed chat store.');
+  console.log('WhatsApp client is ready.');
+
+  // Smoke-test the injected module lookups once. If WhatsApp has shipped a web
+  // build this library version doesn't understand, every getChats()/sendMessage
+  // fails with a minified error and the bot is effectively dead — better to say
+  // so loudly at startup than to surface it later as an unexplained "r".
+  try {
+    const chats = await client.getChats();
+    console.log(`Chat store OK — ${chats.length} chats, web version ${WEB_VERSION}.`);
+  } catch (err) {
+    console.error(
+      `Chat store UNAVAILABLE on web version ${WEB_VERSION}: ${err.message}\n` +
+      'WhatsApp Web likely changed its internal modules. Try another build via ' +
+      'the WA_WEB_VERSION env var, or upgrade whatsapp-web.js.'
+    );
+  }
 });
 
 client.on('authenticated', () => {

@@ -120,17 +120,24 @@ app.get('/groups', requireLogin, async (req, res) => {
     // that says nothing about what actually went wrong.
     console.error('/groups failed:', err.stack || err.message);
 
-    // A short/minified message means the failure came from inside the page
-    // bundle rather than our code, which in practice means the session isn't
-    // usable yet. Send the user home to re-check status instead of showing a
-    // dead-end error page.
-    if (
-      /detached frame|session closed|target closed|execution context/i.test(err.message) ||
-      err.message.length < 20
-    ) {
+    // A transient page problem is worth a trip back to the home screen.
+    if (/detached frame|session closed|target closed|execution context/i.test(err.message)) {
       state.isReady = false; // force the home page to re-evaluate the session
       return res.redirect('/');
     }
+
+    // A short, minified message means the throw came from inside WhatsApp Web's
+    // own bundle — the library can't read the current web build. Redirecting
+    // would just loop; show what's actually wrong instead.
+    if (err.message.length < 20) {
+      return res.render('error', {
+        message:
+          'WhatsApp Web changed its internal layout and this bot version cannot read it. ' +
+          'Set the WA_WEB_VERSION env var to a different build, or upgrade whatsapp-web.js. ' +
+          `(underlying error: "${err.message}")`,
+      });
+    }
+
     res.render('error', { message: err.message });
   }
 });

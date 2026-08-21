@@ -38,8 +38,10 @@
       <!-- Group List -->
       <div class="card section-card">
         <div class="section-header">
-          <h3>Groups (<%= allGroups.length %> total)</h3>
+          <h3>Groups (<%= allGroups.length %> total)<% if (typeof refreshed !== 'undefined' && refreshed) { %> <span style="font-size:0.7em;font-weight:normal;opacity:0.7;">· refreshed from WhatsApp</span><% } %></h3>
           <div class="btn-group">
+            <a class="btn btn-sm btn-outline" href="/groups?refresh=1"
+               title="Re-query every group's name and member list from WhatsApp. Takes a few seconds per group.">Refresh from WhatsApp</a>
             <button type="button" class="btn btn-sm btn-outline" onclick="selectAll()">Select All</button>
             <button type="button" class="btn btn-sm btn-outline" onclick="clearAll()">Clear All</button>
           </div>

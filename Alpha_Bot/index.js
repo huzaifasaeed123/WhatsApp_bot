@@ -98,9 +98,13 @@ app.get('/api/status', requireLogin, (req, res) => {
 app.get('/groups', requireLogin, async (req, res) => {
   if (!state.isReady) return res.redirect('/');
   try {
+    // ?refresh=1 re-queries each group's metadata from WhatsApp before listing.
+    // Off by default: it costs one round trip per group, so it is a deliberate
+    // action rather than something every page load pays for.
+    const refresh = req.query.refresh === '1';
     let allGroups;
     try {
-      allGroups = await getAllGroups();
+      allGroups = await getAllGroups({ refresh });
     } catch (err) {
       // Errors thrown inside WhatsApp Web's own minified bundle arrive with
       // useless one-character messages ("r"), so match on nothing and just
@@ -108,12 +112,13 @@ app.get('/groups', requireLogin, async (req, res) => {
       // synced after a restart) all resolve on their own within seconds.
       console.error('getAllGroups failed, retrying:', err.stack || err.message);
       await new Promise((r) => setTimeout(r, 3000));
-      allGroups = await getAllGroups();
+      allGroups = await getAllGroups({ refresh });
     }
     res.render('groups', {
       allGroups,
       selectedGroups: state.selectedGroups,
       adminGroupId: state.adminGroupId,
+      refreshed: refresh,
     });
   } catch (err) {
     // Log the full stack — err.message alone is frequently a minified symbol

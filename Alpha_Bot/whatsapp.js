@@ -511,7 +511,13 @@ client.on('ready', async () => {
   try {
     const chats = await client.getChats();
     state.isReady = true;
-    console.log(`Chat store OK — ${chats.length} chats.`);
+    const groupCount = chats.filter((c) => c.isGroup).length;
+    // Print the group count as well as the chat count. client.getChats() only
+    // returns what THIS linked device has already synced into its local Chat
+    // collection — it never asks the server — so two deployments of the same
+    // account legitimately disagree. Comparing this number between machines is
+    // the quickest way to tell a stale device from a code problem.
+    console.log(`Chat store OK — ${chats.length} chats, ${groupCount} groups.`);
   } catch (err) {
     state.isReady = true; // still allow the UI in, routes report the failure
     console.error(`Chat store UNAVAILABLE: ${err.message}`);
@@ -694,7 +700,59 @@ async function sendToGroup(groupId, text, media, mediaType) {
 // Lets the server look up member IDs without re-querying WhatsApp.
 let groupCache = new Map();
 
-async function getAllGroups() {
+// Re-query group metadata (name, participants) from WhatsApp for every group
+// this device knows about.
+//
+// The participant list that getChats() returns comes from each chat's cached
+// groupMetadata, which is only refreshed when the device happens to receive an
+// update. On a long-running session it drifts, so member counts go stale. This
+// asks WhatsApp for the current metadata instead.
+//
+// Note the limit: it can only refresh groups already present in the local Chat
+// collection. It cannot discover groups this device never synced — nothing in
+// the page API can, short of re-linking the session.
+//
+// One evaluate() per group rather than a single long-running one, so no call
+// gets close to Puppeteer's protocol timeout on an account with many groups.
+async function refreshGroupMetadata(delayMs = 250) {
+  const ids = await client.pupPage.evaluate(() => {
+    const isGroupChat = (chat) => {
+      try {
+        if (typeof chat.id?.isGroup === 'function') return chat.id.isGroup();
+      } catch { /* fall through to the server check */ }
+      return chat.id?.server === 'g.us';
+    };
+    return window
+      .require('WAWebCollections')
+      .Chat.getModelsArray()
+      .filter(isGroupChat)
+      .map((chat) => chat.id?._serialized)
+      .filter((id) => typeof id === 'string');
+  });
+
+  let refreshed = 0;
+  let failed = 0;
+  for (const id of ids) {
+    try {
+      await client.pupPage.evaluate(async (groupId) => {
+        const wid = window.require('WAWebWidFactory').createWid(groupId);
+        await window
+          .require('WAWebGroupQueryJob')
+          .queryAndUpdateGroupMetadataById({ id: wid });
+      }, id);
+      refreshed++;
+    } catch (err) {
+      failed++;
+    }
+    await sleep(delayMs); // WhatsApp rate-limits bursts of metadata queries
+  }
+
+  console.log(`Group metadata refresh: ${refreshed} refreshed, ${failed} failed, of ${ids.length}.`);
+  return { total: ids.length, refreshed, failed };
+}
+
+async function getAllGroups({ refresh = false } = {}) {
+  if (refresh) await refreshGroupMetadata();
   const chats = await client.getChats();
   const groups = chats
     .filter((c) => c.isGroup)
@@ -784,6 +842,7 @@ module.exports = {
   initClient,
   saveSettings,
   getAllGroups,
+  refreshGroupMetadata,
   getCachedGroup,
   bulkAction,
   updateGroupDescription,

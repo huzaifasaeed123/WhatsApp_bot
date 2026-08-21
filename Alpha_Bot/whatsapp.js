@@ -1,4 +1,4 @@
-const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
+const { Client, LocalAuth, MessageMedia, Message, Chat } = require('whatsapp-web.js');
 const qrcode = require('qrcode');
 const fs = require('fs');
 const path = require('path');
@@ -76,12 +76,107 @@ const state = {
   delaySeconds: 3,      // admin-configurable extra delay between group actions
 };
 
-// WhatsApp Web's July 2026 update minified the WID property `_serialized` to
-// `$1`. whatsapp-web.js reads `id._serialized` throughout, so it now gets
-// undefined and throws minified errors ("r") out of the page bundle. Pinning a
-// web version does NOT help — every current build carries the rename. The fix
-// is the shim installed below (see installSerializedShim).
-// Upstream: wwebjs/whatsapp-web.js#201862, PR #201871 (unmerged as of Aug 2026).
+// WhatsApp Web's July 2026 update minified the message-key property
+// `_serialized` to `$1`. whatsapp-web.js reads `id._serialized` throughout, so
+// it now gets undefined and throws minified errors ("r"/"t") out of the page
+// bundle. Pinning a web version does NOT help — every current build carries the
+// rename.
+//
+// Upstream status (checked 2026-08-21): issue #201862 is still OPEN, PR #201871
+// is still UNMERGED, and npm `latest` is 1.34.7 (published 2026-04-24, i.e.
+// before the breakage). There is no fixed release to upgrade to — the two shims
+// below are what keep this bot running:
+//
+//   installSerializedShim()  — page-side prototype getter, plus a guard around
+//                              Msg.get/getMessagesById. Fixes reads that happen
+//                              INSIDE the browser (e.g. getChats() ->
+//                              getChatModel reading chat.lastReceivedKey).
+//   patchNodeSideIds()       — Node-side normalization. Prototype getters do NOT
+//                              survive CDP serialization, so an id that crosses
+//                              back into Node arrives without one. That is what
+//                              breaks message.downloadMedia() (it passes
+//                              this.id._serialized back into the page) and what
+//                              can leave message.from undefined.
+//
+// Neither half hardcodes the minified property name. WhatsApp reshuffles those
+// between builds — the second outage here was `$1` coming back as an object
+// rather than the serialized string — so both sides match on the SHAPE of the
+// value and refuse to yield anything that is not a string.
+
+// Shapes a serialized JID/message-key takes once it has crossed into Node.
+const WID_RE = /^[^@\s]*@[a-z0-9.-]+$/i;
+const SERIALIZED_RE = /@[a-z0-9.-]+/i;
+
+// Read a serialized id out of whatever shape WhatsApp hands us. Deliberately
+// returns ONLY strings or undefined — never the raw minified property. An
+// earlier version returned `value.$1` blindly, and when WhatsApp reshuffled its
+// minified slots that started handing objects to code expecting strings, which
+// is where "Cannot convert object to primitive value" came from.
+function serializedId(value) {
+  if (value == null) return undefined;
+  if (typeof value === 'string') return value;
+  if (typeof value !== 'object') return undefined;
+
+  if (typeof value._serialized === 'string') return value._serialized;
+
+  // Fall back to any own property already holding an id-shaped string. This
+  // survives renames because it matches on the value, not the property name.
+  for (const key of Object.keys(value)) {
+    const candidate = value[key];
+    if (typeof candidate === 'string' && SERIALIZED_RE.test(candidate)) return candidate;
+  }
+
+  // Last resort: a WID is always user + '@' + server.
+  if (typeof value.user === 'string' && typeof value.server === 'string') {
+    const rebuilt = `${value.user}@${value.server}`;
+    if (WID_RE.test(rebuilt)) return rebuilt;
+  }
+  return undefined;
+}
+
+// Give an id object back its `_serialized` own-property. It has to be an own
+// property, not a prototype getter: these objects have already crossed the CDP
+// boundary, so whatever prototype they carried in the page is gone.
+function normalizeIdObject(id) {
+  if (!id || typeof id !== 'object') return id;
+  if (typeof id._serialized !== 'string') {
+    const serialized = serializedId(id);
+    if (serialized) id._serialized = serialized;
+  }
+  if (id.remote && typeof id.remote === 'object' && typeof id.remote._serialized !== 'string') {
+    const serialized = serializedId(id.remote);
+    if (serialized) id.remote._serialized = serialized;
+  }
+  return id;
+}
+
+// Wrap the structures' _patch so every Message/Chat the library builds comes out
+// with usable ids. Done once, at require time, before any client is created.
+function patchNodeSideIds() {
+  const origMessagePatch = Message.prototype._patch;
+  Message.prototype._patch = function (data) {
+    const result = origMessagePatch.call(this, data);
+    normalizeIdObject(this.id);
+    // Message#from/to/author are pre-flattened to strings by the library using
+    // `._serialized`, so they come out undefined on renamed builds. An undefined
+    // `from` is what silently stops the admin-group filter from ever matching.
+    this.from = this.from ?? serializedId(data.from);
+    this.to = this.to ?? serializedId(data.to);
+    this.author = this.author ?? serializedId(data.author);
+    return result;
+  };
+
+  const origChatPatch = Chat.prototype._patch;
+  Chat.prototype._patch = function (data) {
+    const result = origChatPatch.call(this, data);
+    normalizeIdObject(this.id);
+    return result;
+  };
+
+  console.log('Node-side _serialized normalization installed.');
+}
+
+patchNodeSideIds();
 
 const client = new Client({
   authStrategy: new LocalAuth({ dataPath: AUTH_PATH }),
@@ -113,43 +208,232 @@ client.on('qr', async (qr) => {
   console.log('QR code ready — scan it on the admin panel.');
 });
 
-// Restore `_serialized` on the WID/MsgKey prototypes as a getter aliasing the
-// new `$1` property. Defining it on the prototype (rather than rewriting keys)
-// leaves the underlying objects untouched, which matters because WhatsApp uses
-// them for E2E decryption. Safe to run repeatedly: it no-ops when `_serialized`
-// already exists, so an older web build is unaffected.
+// Restore a usable `_serialized` on the WID/MsgKey prototypes.
+//
+// The rename is a MINIFIER artifact, so the new name is not stable. An earlier
+// version of this shim hardcoded `$1`; a later WhatsApp build shuffled the
+// minified slots so that `$1` held an OBJECT instead of the serialized string.
+// That surfaced as WhatsApp's own code doing `ids.map(String)` inside
+// `Msg.getMessagesById` and throwing "Cannot convert object to primitive value".
+//
+// So: never hardcode a minified name, and never let the getter return a
+// non-string. Resolution order is (1) the class's native toString(), (2) any own
+// property already holding a correctly-shaped string, (3) rebuild from the
+// object's parts, identified by shape rather than by name. Anything that fails
+// all three yields `undefined`, which degrades to a missing value instead of a
+// page-side crash.
 async function installSerializedShim() {
   try {
     const result = await client.pupPage.evaluate(() => {
-      const patched = [];
-      const candidates = [
-        ['MsgKey', 'WAWebMsgKey'],
-        ['Wid', 'WAWebWid'],
-      ];
+      // A serialized WID is `user@server`; a serialized MsgKey is
+      // `fromMe_remote@server_id[_participant]`.
+      const WID_RE = /^[^@\s]*@[a-z0-9.-]+$/i;
+      const MSGKEY_RE = /^(true|false)_[^@\s]*@[a-z0-9.-]+_[^\s]+/i;
+      const SERVER_RE = /^(c\.us|g\.us|lid|broadcast|newsletter|s\.whatsapp\.net|status)$/i;
 
-      for (const [label, moduleName] of candidates) {
-        let proto;
-        try {
-          const mod = window.require(moduleName);
-          proto = (mod?.default || mod?.[label] || mod)?.prototype;
-        } catch { continue; }
+      // Re-entrancy guard: a class's toString() may itself read `_serialized`,
+      // which is the property being defined. Without this, that recurses.
+      let resolving = false;
 
-        if (proto && !('_serialized' in proto)) {
-          Object.defineProperty(proto, '_serialized', {
-            get() { return this.$1; },
-            configurable: true,
-          });
-          patched.push(label);
+      const ownStringMatching = (obj, re) => {
+        for (const key of Object.getOwnPropertyNames(obj)) {
+          let value;
+          try { value = obj[key]; } catch { continue; }
+          if (typeof value === 'string' && re.test(value)) return value;
         }
+        return undefined;
+      };
+
+      const nativeToString = (obj, re) => {
+        if (resolving) return undefined;
+        resolving = true;
+        try {
+          const str = obj.toString();
+          return typeof str === 'string' && re.test(str) ? str : undefined;
+        } catch {
+          return undefined;
+        } finally {
+          resolving = false;
+        }
+      };
+
+      // Serialized form of a WID, whatever its properties happen to be called.
+      const widString = (wid) => {
+        if (wid == null) return undefined;
+        if (typeof wid === 'string') return WID_RE.test(wid) ? wid : undefined;
+        if (typeof wid !== 'object') return undefined;
+
+        const direct = nativeToString(wid, WID_RE) || ownStringMatching(wid, WID_RE);
+        if (direct) return direct;
+
+        // A WID is always user + '@' + server. Recombine the plain string
+        // properties, anchoring on the small set of valid server values.
+        const strings = Object.getOwnPropertyNames(wid)
+          .map((k) => { try { return wid[k]; } catch { return null; } })
+          .filter((v) => typeof v === 'string');
+        const server = strings.find((v) => SERVER_RE.test(v));
+        const user = strings.find((v) => v !== server && /^[0-9A-Za-z._-]+$/.test(v));
+        if (server && user) return `${user}@${server}`;
+        return undefined;
+      };
+
+      // Serialized form of a MsgKey.
+      const msgKeyString = (key) => {
+        if (key == null) return undefined;
+        if (typeof key === 'string') return MSGKEY_RE.test(key) ? key : undefined;
+        if (typeof key !== 'object') return undefined;
+
+        const direct = nativeToString(key, MSGKEY_RE) || ownStringMatching(key, MSGKEY_RE);
+        if (direct) return direct;
+
+        // Rebuild it, identifying the parts by shape: the remote is the WID-ish
+        // property, fromMe the boolean, the id the remaining opaque string.
+        let remote, participant, fromMe;
+        const plainStrings = [];
+        for (const prop of Object.getOwnPropertyNames(key)) {
+          let value;
+          try { value = key[prop]; } catch { continue; }
+          if (typeof value === 'boolean') {
+            if (fromMe === undefined) fromMe = value;
+          } else if (typeof value === 'string') {
+            plainStrings.push(value);
+          } else if (value && typeof value === 'object') {
+            const asWid = widString(value);
+            if (!asWid) continue;
+            // The chat lives in `remote`, a group sender in `participant`.
+            // A group JID identifies the remote unambiguously.
+            if (!remote || asWid.endsWith('@g.us')) remote = asWid;
+            else participant = asWid;
+          }
+        }
+        // The message id is the string that is not itself a WID.
+        const id = plainStrings.find((s) => !WID_RE.test(s));
+        if (remote == null || id == null || fromMe === undefined) return undefined;
+        return `${fromMe}_${remote}_${id}` + (participant ? `_${participant}` : '');
+      };
+
+      const patched = [];
+      const install = (label, proto, resolver) => {
+        if (!proto || Object.prototype.hasOwnProperty.call(proto, '_serialized')) return;
+        Object.defineProperty(proto, '_serialized', {
+          get() { return resolver(this); },
+          configurable: true,
+        });
+        patched.push(label);
+      };
+
+      try {
+        const mod = window.require('WAWebMsgKey');
+        install('MsgKey', (mod?.default || mod?.MsgKey || mod)?.prototype, msgKeyString);
+      } catch { /* module gone — nothing to alias */ }
+
+      try {
+        const wid = window.require('WAWebWidFactory').createWid('12345@c.us');
+        install('Wid', Object.getPrototypeOf(wid), widString);
+      } catch { /* factory shape changed — leave WID alone */ }
+
+      // Belt and braces: an id we still failed to decode would reach
+      // `Msg.get`/`getMessagesById` as a non-string and blow up inside
+      // `ids.map(String)`. A missing lastMessage is survivable; a throw takes
+      // all of getChats() down with it, because getChats is a Promise.all.
+      let guarded = false;
+      try {
+        const Msg = window.require('WAWebCollections').Msg;
+        if (Msg && !Msg.__alphaBotGuard) {
+          const origGet = Msg.get.bind(Msg);
+          Msg.get = function (key) {
+            try { return key == null ? undefined : origGet(key); } catch { return undefined; }
+          };
+          const origGetMessagesById = Msg.getMessagesById.bind(Msg);
+          Msg.getMessagesById = async function (ids) {
+            const clean = (Array.isArray(ids) ? ids : []).filter((id) => id != null);
+            if (!clean.length) return { messages: [] };
+            try { return await origGetMessagesById(clean); } catch { return { messages: [] }; }
+          };
+          Msg.__alphaBotGuard = true;
+          guarded = true;
+        }
+      } catch { /* collection missing — nothing to guard */ }
+
+      // Ids lose their prototype when they cross the CDP boundary into Node, so
+      // the getters above never reach the Node side. Materialize the string as
+      // an own property on the models the library ships out — this is what makes
+      // message.downloadMedia() and the message.from filter work.
+      const wrappedModels = [];
+      const wrapModel = (name, resolver) => {
+        const original = window.WWebJS?.[name];
+        if (typeof original !== 'function' || original.__alphaBotWrapped) return;
+        const wrapper = async function (...callArgs) {
+          const model = await original.apply(this, callArgs);
+          try {
+            const live = callArgs[0];
+            if (model?.id && typeof model.id === 'object' && typeof model.id._serialized !== 'string') {
+              const serialized = resolver(live?.id) || resolver(model.id);
+              if (serialized) model.id._serialized = serialized;
+            }
+            // Message#from/to/author are WIDs the library flattens via
+            // `._serialized`; give them the same treatment.
+            for (const field of ['from', 'to', 'author']) {
+              const value = model?.[field];
+              if (value && typeof value === 'object' && typeof value._serialized !== 'string') {
+                const serialized = widString(value);
+                if (serialized) value._serialized = serialized;
+              }
+            }
+            const remote = model?.id?.remote;
+            if (remote && typeof remote === 'object' && typeof remote._serialized !== 'string') {
+              const serialized = widString(remote) || widString(live?.id?.remote);
+              if (serialized) remote._serialized = serialized;
+            }
+          } catch { /* leave the model as-is */ }
+          return model;
+        };
+        wrapper.__alphaBotWrapped = true;
+        window.WWebJS[name] = wrapper;
+        wrappedModels.push(name);
+      };
+      wrapModel('getMessageModel', msgKeyString);
+      wrapModel('getChatModel', widString);
+
+      // Report what the resolver actually produces on this build, so the next
+      // rename shows up in the logs as a decode failure instead of a stack.
+      let sample = 'no chat carried a lastReceivedKey';
+      try {
+        const chat = window
+          .require('WAWebCollections')
+          .Chat.getModelsArray()
+          .find((c) => c.lastReceivedKey);
+        if (chat) {
+          const decoded = msgKeyString(chat.lastReceivedKey);
+          sample = decoded ? `ok (${decoded.slice(0, 28)}...)` : 'FAILED TO DECODE';
+        }
+      } catch (e) {
+        sample = `probe threw ${e.name}`;
       }
-      return { patched, version: window.Debug?.VERSION || 'unknown' };
+
+      return {
+        patched,
+        guarded,
+        wrappedModels,
+        sample,
+        version: window.Debug?.VERSION || 'unknown',
+      };
     });
 
     console.log(
       result.patched.length
-        ? `Applied _serialized→$1 shim to: ${result.patched.join(', ')} (WA Web ${result.version}).`
+        ? `Applied _serialized shim to: ${result.patched.join(', ')} (WA Web ${result.version}).`
         : `No _serialized shim needed (WA Web ${result.version}).`
     );
+    if (result.guarded) console.log('Installed Msg.get/getMessagesById key guard.');
+    if (result.wrappedModels.length) console.log(`Materializing ids for: ${result.wrappedModels.join(', ')}.`);
+    console.log('MsgKey decode check:', result.sample);
+    if (result.sample === 'FAILED TO DECODE') {
+      console.error(
+        'WARNING: MsgKey could not be decoded on this build — WhatsApp likely ' +
+        'renamed things again. getChats() will still work, but media forwarding may not.'
+      );
+    }
   } catch (err) {
     console.error('Could not install _serialized shim:', err.message);
   }
@@ -356,11 +640,11 @@ async function getAllGroups() {
     .filter((c) => c.isGroup)
     .map((c) => {
       // Participant JIDs already come back from getChats() — no extra API call.
-      const memberIds = (c.participants || []).map((p) =>
-        typeof p.id === 'object' ? p.id._serialized : p.id
-      );
+      const memberIds = (c.participants || [])
+        .map((p) => serializedId(p.id))
+        .filter(Boolean);
       return {
-        id: c.id._serialized,
+        id: serializedId(c.id),
         name: c.name,
         memberCount: memberIds.length,
         memberIds, // used to compute unique (de-duplicated) totals across groups

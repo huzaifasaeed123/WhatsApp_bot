@@ -17,6 +17,7 @@ function saveSettings() {
       uniqueMemberCount: state.uniqueMemberCount,
       adminGroupId: state.adminGroupId,
       delaySeconds: state.delaySeconds,
+      forwardMode: state.forwardMode,
     };
     fs.writeFileSync(SETTINGS_PATH, JSON.stringify(data, null, 2));
   } catch (e) {
@@ -33,6 +34,9 @@ function loadSettings() {
     if (typeof data.uniqueMemberCount === 'number') state.uniqueMemberCount = data.uniqueMemberCount;
     if ('adminGroupId' in data) state.adminGroupId = data.adminGroupId;
     if (typeof data.delaySeconds === 'number') state.delaySeconds = data.delaySeconds;
+    if (data.forwardMode === 'copy' || data.forwardMode === 'forward') {
+      state.forwardMode = data.forwardMode;
+    }
     console.log('Loaded saved settings from', SETTINGS_PATH);
   } catch (e) {
     console.error('Failed to load settings:', e.message);
@@ -74,6 +78,11 @@ const state = {
   adminGroupId: null,   // group ID that triggers auto-forward
   schedules: [],        // array of scheduled jobs
   delaySeconds: 3,      // admin-configurable extra delay between group actions
+  // How the admin group's messages reach the selected groups:
+  //   'copy'    — re-compose the text/media as a brand new message (default).
+  //   'forward' — ask WhatsApp to forward the original message.
+  // See the auto-forward listener for what each mode preserves.
+  forwardMode: 'copy',
 };
 
 // WhatsApp Web's July 2026 update minified the message-key property
@@ -641,8 +650,11 @@ client.on('message', async (message) => {
   let sent = 0;
   let failed = 0;
   try {
+    // In forward mode WhatsApp moves the original message itself, so there is
+    // nothing to download — and downloading is the step most likely to fail on
+    // a channel post, whose media the bot may not be able to fetch directly.
     let media = null;
-    if (message.hasMedia) {
+    if (state.forwardMode !== 'forward' && message.hasMedia) {
       media = await message.downloadMedia();
     }
 
@@ -657,7 +669,17 @@ client.on('message', async (message) => {
       }
 
       try {
-        await sendToGroup(group.id, message.body, media, message.type);
+        if (state.forwardMode === 'forward') {
+          // A real WhatsApp forward. Keeps whatever context the original
+          // carried — the "Forwarded" tag, and for a post that originated in a
+          // channel, the channel header and its "View channel" footer, because
+          // the message keeps its newsletter attribution rather than being
+          // retyped by the bot. The trade-off is that the content is passed
+          // through verbatim; it cannot be altered on the way.
+          await message.forward(group.id);
+        } else {
+          await sendToGroup(group.id, message.body, media, message.type);
+        }
         sent++;
       } catch (err) {
         failed++;
@@ -811,14 +833,30 @@ async function updateGroupPhoto(groupId, mediaBase64, mimetype) {
   await chat.setPicture(media);
 }
 
-async function updateGroupSettings(groupId, settings) {
+// settings: { messagesAdminsOnly, infoAdminsOnly, addMembersAdminsOnly }
+//
+// Each key is optional and only a boolean is acted on, so the caller can change
+// one permission without disturbing the other two — leaving a key out means
+// "leave this as it is", which is what the dashboard's "Don't change" option
+// sends.
+//
+// Each setter is a separate request to WhatsApp. They are spaced out here for
+// the same reason bulkAction spaces out groups: three permission changes fired
+// back to back on every group in a large account is exactly the burst pattern
+// that gets an account flagged.
+async function updateGroupSettings(groupId, settings, stepDelayMs = 1500) {
   const chat = await client.getChatById(groupId);
-  // settings: { messagesAdminsOnly, infoAdminsOnly }
-  if (typeof settings.messagesAdminsOnly === 'boolean') {
-    await chat.setMessagesAdminsOnly(settings.messagesAdminsOnly);
-  }
-  if (typeof settings.infoAdminsOnly === 'boolean') {
-    await chat.setInfoAdminsOnly(settings.infoAdminsOnly);
+
+  const steps = [
+    ['messagesAdminsOnly', (value) => chat.setMessagesAdminsOnly(value)],
+    ['infoAdminsOnly', (value) => chat.setInfoAdminsOnly(value)],
+    ['addMembersAdminsOnly', (value) => chat.setAddMembersAdminsOnly(value)],
+  ].filter(([key]) => typeof settings[key] === 'boolean');
+
+  for (let i = 0; i < steps.length; i++) {
+    const [key, apply] = steps[i];
+    await apply(settings[key]);
+    if (i < steps.length - 1) await sleep(stepDelayMs);
   }
 }
 

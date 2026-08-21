@@ -24,6 +24,11 @@ const {
 const app = express();
 const upload = multer({ storage: multer.memoryStorage() });
 
+// The dashboard posts every form as FormData, i.e. multipart/form-data, which
+// neither express.json() nor express.urlencoded() parses. Routes that take only
+// text fields therefore need upload.none() to populate req.body — without it
+// req.body is empty and the handler silently acts on undefined values.
+
 // ─── Config ──────────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'admin@example.com';
@@ -182,6 +187,7 @@ app.get('/admin', requireLogin, (req, res) => {
     uniqueMemberCount: state.uniqueMemberCount || 0,
     adminGroupId: state.adminGroupId,
     delaySeconds: state.delaySeconds,
+    forwardMode: state.forwardMode,
     schedules: state.schedules,
   });
 });
@@ -194,6 +200,17 @@ app.post('/admin/delay', requireLogin, (req, res) => {
   res.json({ ok: true, delaySeconds: state.delaySeconds });
 });
 
+// Choose how the admin group's messages reach the selected groups
+app.post('/admin/forward-mode', requireLogin, (req, res) => {
+  const mode = req.body.forwardMode;
+  if (mode !== 'copy' && mode !== 'forward') {
+    return res.json({ ok: false, error: 'Unknown forward mode.' });
+  }
+  state.forwardMode = mode;
+  saveSettings();
+  res.json({ ok: true, forwardMode: state.forwardMode });
+});
+
 // ─── Group Management Actions ────────────────────────────────────────────────
 
 function effectiveDelay() {
@@ -201,7 +218,7 @@ function effectiveDelay() {
 }
 
 // Update description for all selected groups
-app.post('/admin/update-description', requireLogin, async (req, res) => {
+app.post('/admin/update-description', requireLogin, upload.none(), async (req, res) => {
   const { description } = req.body;
   if (!description) return res.json({ ok: false, error: 'Description is required.' });
   try {
@@ -215,7 +232,7 @@ app.post('/admin/update-description', requireLogin, async (req, res) => {
 });
 
 // Update subject/name for all selected groups
-app.post('/admin/update-subject', requireLogin, async (req, res) => {
+app.post('/admin/update-subject', requireLogin, upload.none(), async (req, res) => {
   const { subject } = req.body;
   if (!subject) return res.json({ ok: false, error: 'Subject is required.' });
   try {
@@ -244,11 +261,21 @@ app.post('/admin/update-dp', requireLogin, upload.single('dp'), async (req, res)
 });
 
 // Update group permissions
-app.post('/admin/update-permissions', requireLogin, async (req, res) => {
-  const settings = {
-    messagesAdminsOnly: req.body.messagesAdminsOnly === 'true',
-    infoAdminsOnly: req.body.infoAdminsOnly === 'true',
-  };
+app.post('/admin/update-permissions', requireLogin, upload.none(), async (req, res) => {
+  // Anything that is not an explicit 'true'/'false' is left out of the object,
+  // and updateGroupSettings only acts on booleans — so "Don't change" really
+  // does leave that permission alone rather than resetting it to a default.
+  const settings = {};
+  for (const key of ['messagesAdminsOnly', 'infoAdminsOnly', 'addMembersAdminsOnly']) {
+    if (req.body[key] === 'true' || req.body[key] === 'false') {
+      settings[key] = req.body[key] === 'true';
+    }
+  }
+
+  if (Object.keys(settings).length === 0) {
+    return res.json({ ok: false, error: 'Nothing to change — every permission is set to "Don\'t change".' });
+  }
+
   try {
     const results = await bulkAction(state.selectedGroups, async (group) => {
       await updateGroupSettings(group.id, settings);
@@ -262,7 +289,7 @@ app.post('/admin/update-permissions', requireLogin, async (req, res) => {
 // ─── Member Management ────────────────────────────────────────────────────────
 
 // Add a number to all selected groups
-app.post('/admin/add-member', requireLogin, async (req, res) => {
+app.post('/admin/add-member', requireLogin, upload.none(), async (req, res) => {
   let { phone } = req.body;
   if (!phone) return res.json({ ok: false, error: 'Phone number is required.' });
 
@@ -282,7 +309,7 @@ app.post('/admin/add-member', requireLogin, async (req, res) => {
 });
 
 // Make a number admin in all selected groups
-app.post('/admin/make-admin', requireLogin, async (req, res) => {
+app.post('/admin/make-admin', requireLogin, upload.none(), async (req, res) => {
   let { phone } = req.body;
   if (!phone) return res.json({ ok: false, error: 'Phone number is required.' });
 
@@ -301,7 +328,7 @@ app.post('/admin/make-admin', requireLogin, async (req, res) => {
 });
 
 // Remove admin from a number in all selected groups
-app.post('/admin/remove-admin', requireLogin, async (req, res) => {
+app.post('/admin/remove-admin', requireLogin, upload.none(), async (req, res) => {
   let { phone } = req.body;
   if (!phone) return res.json({ ok: false, error: 'Phone number is required.' });
 
@@ -320,7 +347,7 @@ app.post('/admin/remove-admin', requireLogin, async (req, res) => {
 });
 
 // Remove a number from all selected groups
-app.post('/admin/remove-member', requireLogin, async (req, res) => {
+app.post('/admin/remove-member', requireLogin, upload.none(), async (req, res) => {
   let { phone } = req.body;
   if (!phone) return res.json({ ok: false, error: 'Phone number is required.' });
 

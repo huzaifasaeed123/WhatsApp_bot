@@ -35,6 +35,25 @@
       </div>
     </div>
 
+    <!-- Forward Mode -->
+    <div class="card section-card" style="margin-bottom:1.5rem;">
+      <h3>↪️ Auto-Forward Mode</h3>
+      <p class="text-muted">How messages from the admin source group are delivered to the selected groups.</p>
+      <div class="inline-form">
+        <select id="forwardModeInput" class="select-input" style="width:auto;">
+          <option value="copy" <%= forwardMode === 'copy' ? 'selected' : '' %>>Copy — send as a new message</option>
+          <option value="forward" <%= forwardMode === 'forward' ? 'selected' : '' %>>Forward — keep the original</option>
+        </select>
+        <button class="btn btn-sm btn-primary" onclick="saveForwardMode()">Save</button>
+      </div>
+      <p class="text-muted" style="margin-top:0.75rem;font-size:0.85em;">
+        <strong>Copy</strong> re-sends the text and media as if the bot wrote it — no "Forwarded" tag, and a
+        channel post loses its channel header and "View channel" button.
+        <strong>Forward</strong> asks WhatsApp to forward the original, which keeps the "Forwarded" tag and a
+        channel post's attribution, but the content cannot be altered on the way.
+      </p>
+    </div>
+
     <!-- Tabs -->
     <div class="tabs">
       <button class="tab-btn active" onclick="showTab('broadcast')">📢 Broadcast</button>
@@ -121,13 +140,18 @@
     <div id="tab-permissions" class="tab-content hidden">
       <div class="card section-card">
         <h3>🔒 Update Group Permissions</h3>
-        <p class="text-muted">Control who can send messages and change group info.</p>
+        <p class="text-muted">
+          Control who can send messages, change group info, and add members.
+          Anything left on <strong>Don't change</strong> is not touched.
+          Applied one group at a time using the request delay above.
+        </p>
         <form id="permForm">
           <div class="form-group">
             <label class="toggle-label">
               <span>Only Admins can send messages</span>
               <div class="toggle-wrap">
                 <select name="messagesAdminsOnly" class="select-input" style="width:auto;">
+                  <option value="">Don't change</option>
                   <option value="true">Admins Only</option>
                   <option value="false">Everyone</option>
                 </select>
@@ -139,6 +163,19 @@
               <span>Only Admins can edit group info</span>
               <div class="toggle-wrap">
                 <select name="infoAdminsOnly" class="select-input" style="width:auto;">
+                  <option value="">Don't change</option>
+                  <option value="true">Admins Only</option>
+                  <option value="false">Everyone</option>
+                </select>
+              </div>
+            </label>
+          </div>
+          <div class="form-group">
+            <label class="toggle-label">
+              <span>Who can add new members</span>
+              <div class="toggle-wrap">
+                <select name="addMembersAdminsOnly" class="select-input" style="width:auto;">
+                  <option value="">Don't change</option>
                   <option value="true">Admins Only</option>
                   <option value="false">Everyone</option>
                 </select>
@@ -314,6 +351,19 @@
     submitForm('subjectForm', '/admin/update-subject', 'subjectResult');
     submitForm('dpForm', '/admin/update-dp', 'dpResult');
     submitForm('permForm', '/admin/update-permissions', 'permResult');
+
+    // ── Auto-forward mode
+    async function saveForwardMode() {
+      const mode = document.getElementById('forwardModeInput').value;
+      const res = await fetch('/admin/forward-mode', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ forwardMode: mode }),
+      });
+      const data = await res.json();
+      toast(data.ok ? `Forward mode set to "${data.forwardMode}".` : data.error);
+    }
+    window.saveForwardMode = saveForwardMode;
 
     // ── Schedule form
     document.getElementById('scheduleForm').addEventListener('submit', async (e) => {

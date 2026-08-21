@@ -10,6 +10,10 @@ const check = (label, actual, expected) => {
   ok ? pass++ : fail++;
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${label}\n        got: ${JSON.stringify(actual)}${ok ? '' : `\n   expected: ${JSON.stringify(expected)}`}`);
 };
+const checkNoThrow = (label, fn) => {
+  try { fn(); pass++; console.log(`PASS  ${label}`); }
+  catch (e) { fail++; console.log(`FAIL  ${label}\n        threw: ${e.message}`); }
+};
 
 // ───────────────────────────────────────────────────────────────────────────
 // 1. Page-side resolvers. Pull the evaluate() callback out of whatsapp.js and
@@ -27,14 +31,18 @@ for (; i < src.length; i++) {
 const bodySrc = src.slice(from + marker.length, end);
 
 // --- the mocked page ---------------------------------------------------------
-// Minified WID: `user`/`server` renamed, no _serialized, but toString survives.
-class MinifiedWid {
-  constructor(user, server) { this.$0 = user; this.$2 = server; }
-  toString() { return `${this.$0}@${this.$2}`; }
+// WID as production actually reports it on WA Web 2.3000.1045737606: NOT
+// renamed — `server`, `user` and `_serialized` are all still own properties.
+class RealWid {
+  constructor(user, server) {
+    this.server = server;
+    this.user = user;
+    this._serialized = `${user}@${server}`;
+  }
+  toString() { return this._serialized; }
 }
-// Minified MsgKey exactly as the production build behaves: `$1` is an OBJECT
-// (the regression that produced "Cannot convert object to primitive value"),
-// and toString() has been minified away entirely.
+// MsgKey IS renamed, and `$1` holds an OBJECT rather than the serialized string
+// (the regression that produced "Cannot convert object to primitive value").
 class MinifiedMsgKey {
   constructor(remote, id, fromMe, participant) {
     this.$1 = remote;              // object, NOT the serialized string
@@ -43,16 +51,14 @@ class MinifiedMsgKey {
     if (participant) this.$5 = participant;
   }
 }
-const brokenKey = new MinifiedMsgKey(new MinifiedWid('923001234567', 'g.us'), 'ABCDEF123456', false);
+const brokenKey = new MinifiedMsgKey(new RealWid('120363427554847352', 'g.us'), 'ABCDEF123456', false);
 const brokenKeyGroup = new MinifiedMsgKey(
-  new MinifiedWid('923001234567', 'g.us'), 'FEDCBA654321', false, new MinifiedWid('923339876543', 'c.us')
+  new RealWid('120363427554847352', 'g.us'), 'FEDCBA654321', false, new RealWid('923339876543', 'c.us')
 );
 
-const msgGetCalls = [];
 const collections = {
   Msg: {
     get(key) {
-      msgGetCalls.push(key);
       if (typeof key !== 'string') throw new TypeError('Cannot convert object to primitive value');
       return null;
     },
@@ -64,93 +70,130 @@ const collections = {
   Chat: { getModelsArray: () => [{ lastReceivedKey: brokenKey }] },
 };
 
-const captured = {};
+const serialize = (o) => JSON.parse(JSON.stringify(o));
+
 const window = {
-  Debug: { VERSION: '2.3000.1050000000' },
+  Debug: { VERSION: '2.3000.1045737606' },
   require(name) {
     if (name === 'WAWebMsgKey') return MinifiedMsgKey;
-    if (name === 'WAWebWidFactory') return { createWid: (s) => new MinifiedWid(...s.split('@')) };
+    if (name === 'WAWebWidFactory') return { createWid: (s) => new RealWid(...s.split('@').reverse().reverse()) };
     if (name === 'WAWebCollections') return collections;
     throw new Error('module not found: ' + name);
   },
   WWebJS: {
-    async getMessageModel(message) {
-      // mimics message.serialize(): own properties only, prototype dropped
-      captured.rawId = JSON.parse(JSON.stringify(message.id));
-      return { id: JSON.parse(JSON.stringify(message.id)), from: JSON.parse(JSON.stringify(message.from)), body: 'hi' };
+    // SYNCHRONOUS in the real library (Injected/Utils.js:803). Wrapping this in
+    // an async function is what broke production: the caller below assigns the
+    // return value straight into the chat model, so a Promise landed where a
+    // message model belonged and reached Node as `{}`.
+    getMessageModel(message) {
+      return { id: serialize(message.id), from: serialize(message.from), body: 'hi' };
     },
+    // ASYNC in the real library (Injected/Utils.js:938).
     async getChatModel(chat) {
-      return { id: JSON.parse(JSON.stringify(chat.id)), formattedTitle: 'T', isGroup: true };
+      const model = { id: serialize(chat.id), formattedTitle: 'T', isGroup: true, lastMessage: null };
+      // mirrors Injected/Utils.js:996-999
+      if (chat.lastReceivedKey) {
+        model.lastMessage = window.WWebJS.getMessageModel({
+          id: chat.lastReceivedKey, from: new RealWid('120363427554847352', 'g.us'),
+        });
+      }
+      return model;
     },
   },
 };
 
-const result = new Function('window', `${bodySrc}`)(window);
+const result = new Function('window', bodySrc)(window);
 
 console.log('\n─── page-side shim ───');
-check('patched prototypes', result.patched.join(','), 'MsgKey,Wid');
+check('patched prototypes', result.patched.join(','), 'MsgKey');
 check('Msg guard installed', result.guarded, true);
 check('models wrapped', result.wrappedModels.join(','), 'getMessageModel,getChatModel');
-check('lastReceivedKey decodes', result.sample, 'ok (false_923001234567@g.us_ABCD...)');
+check('lastReceivedKey decodes', result.sample, 'ok (false_120363427554847352@g.u...)');
 
-// the prototype getter now yields a STRING, never an object
-check('MsgKey._serialized (1:1)', brokenKey._serialized, 'false_923001234567@g.us_ABCDEF123456');
+// the prototype getter yields a STRING, never an object
+check('MsgKey._serialized (1:1)', brokenKey._serialized, 'false_120363427554847352@g.us_ABCDEF123456');
 check('MsgKey._serialized (group)', brokenKeyGroup._serialized,
-  'false_923001234567@g.us_FEDCBA654321_923339876543@c.us');
-check('Wid._serialized', new MinifiedWid('923001234567', 'c.us')._serialized, '923001234567@c.us');
+  'false_120363427554847352@g.us_FEDCBA654321_923339876543@c.us');
 check('never returns an object', typeof brokenKey._serialized, 'string');
+checkNoThrow('constructor may assign this._serialized', () => { new RealWid('1','c.us'); });
+check('un-renamed WID untouched', new RealWid('923001234567', 'c.us')._serialized, '923001234567@c.us');
 
 // the guard turns a fatal page-side throw into a survivable miss
 check('Msg.get(object) no longer throws', collections.Msg.get({}), undefined);
 
+// REGRESSION: the wrapper must not change a synchronous function into an async
+// one. This is the bug that produced "Cannot read properties of undefined
+// (reading 'id')" at Message._patch.
+const syncModel = window.WWebJS.getMessageModel({
+  id: brokenKey, from: new RealWid('120363427554847352', 'g.us'),
+});
+check('getMessageModel stays synchronous', typeof syncModel?.then, 'undefined');
+check('getMessageModel id materialized', syncModel.id._serialized, 'false_120363427554847352@g.us_ABCDEF123456');
+
 (async () => {
   check('getMessagesById(objects) survives', JSON.stringify(await collections.Msg.getMessagesById([{}])), '{"messages":[]}');
 
-  // the model wrapper materializes _serialized across the CDP boundary
-  const model = await window.WWebJS.getMessageModel({
-    id: brokenKey, from: new MinifiedWid('923001234567', 'g.us'),
+  const chatModel = await window.WWebJS.getChatModel({
+    id: new RealWid('120363427554847352', 'g.us'), lastReceivedKey: brokenKey,
   });
-  check('getMessageModel id materialized', model.id._serialized, 'false_923001234567@g.us_ABCDEF123456');
-  check('getMessageModel from materialized', model.from._serialized, '923001234567@g.us');
-  check('raw serialize() had no _serialized', captured.rawId._serialized, undefined);
+  check('getChatModel stays async', typeof chatModel.id, 'object');
+  check('chat lastMessage is a model, not a Promise', typeof chatModel.lastMessage.then, 'undefined');
+  check('chat lastMessage has a usable id', typeof chatModel.lastMessage.id.id, 'string');
+  check('chat lastMessage id.fromMe restored', chatModel.lastMessage.id.fromMe, false);
+  check('chat lastMessage id.remote restored', chatModel.lastMessage.id.remote, '120363427554847352@g.us');
 
   // ─────────────────────────────────────────────────────────────────────────
-  // 2. Node-side normalization, including the object-valued `$1` regression.
+  // 2. Node-side normalization.
   // ─────────────────────────────────────────────────────────────────────────
   console.log('\n─── node-side normalization ───');
   require(path.join(ROOT, 'whatsapp.js'));
   const { Message, Chat } = require('whatsapp-web.js');
   const fakeClient = {};
-  const json = (o) => JSON.parse(JSON.stringify(o));
 
-  // The regression shape: `$1` is an object. Must NOT leak through.
-  const poisoned = new Message(fakeClient, json({
-    id: { $1: { $0: '923001234567', $2: 'g.us' }, $3: 'ABC', $4: false },
-    from: { $0: '923001234567', $2: 'g.us' },
-    body: 'x', type: 'chat',
+  // The whole chat model, as it now crosses CDP, must build a real Chat.
+  checkNoThrow('Chat builds from a real getChatModel payload', () => {
+    new Chat(fakeClient, serialize(chatModel));
+  });
+
+  // REGRESSION: a lastMessage without a usable id must not take getChats() down.
+  checkNoThrow('malformed lastMessage does not throw', () => {
+    new Chat(fakeClient, serialize({
+      id: { user: '1', server: 'g.us', _serialized: '1@g.us' },
+      formattedTitle: 'T', isGroup: true,
+      lastMessage: {}, // what a serialized Promise looked like
+    }));
+  });
+  const dropped = new Chat(fakeClient, serialize({
+    id: { user: '1', server: 'g.us', _serialized: '1@g.us' },
+    formattedTitle: 'T', isGroup: true, lastMessage: {},
+  }));
+  check('malformed lastMessage dropped', dropped.lastMessage, undefined);
+
+  // The object-valued `$1` must never leak through to Node.
+  const poisoned = new Message(fakeClient, serialize({
+    id: { $1: { server: 'g.us', user: '1' }, $3: 'ABC', $4: false },
+    from: { server: 'g.us', user: '1' }, body: 'x', type: 'chat',
   }));
   check('object-valued $1 not leaked', typeof poisoned.id._serialized !== 'object', true);
 
-  // Realistic post-rename payload where the string did survive serialization
-  // (this is what the page-side wrapper now guarantees).
-  const shipped = new Message(fakeClient, json({
-    id: { _serialized: 'false_923001234567@g.us_ABC', remote: { user: '923001234567', server: 'g.us' } },
-    from: { user: '923001234567', server: 'g.us' },
-    to: { user: '923339876543', server: 'c.us' },
+  const shipped = new Message(fakeClient, serialize({
+    id: { _serialized: 'false_1@g.us_ABC', remote: { user: '1', server: 'g.us' } },
+    from: { user: '1', server: 'g.us' },
+    to: { user: '2', server: 'c.us' },
     body: 'x', type: 'chat',
   }));
-  check('id._serialized', shipped.id._serialized, 'false_923001234567@g.us_ABC');
-  check('id.remote._serialized rebuilt', shipped.id.remote._serialized, '923001234567@g.us');
-  check('from rebuilt from user/server', shipped.from, '923001234567@g.us');
-  check('to rebuilt from user/server', shipped.to, '923339876543@c.us');
+  check('id._serialized', shipped.id._serialized, 'false_1@g.us_ABC');
+  check('id.remote._serialized rebuilt', shipped.id.remote._serialized, '1@g.us');
+  check('from rebuilt from user/server', shipped.from, '1@g.us');
+  check('to rebuilt from user/server', shipped.to, '2@c.us');
 
-  const chat = new Chat(fakeClient, json({
-    id: { user: '923001234567', server: 'g.us' }, formattedTitle: 'Test', isGroup: true,
+  const chat = new Chat(fakeClient, serialize({
+    id: { user: '1', server: 'g.us' }, formattedTitle: 'Test', isGroup: true,
   }));
-  check('chat.id._serialized rebuilt', chat.id._serialized, '923001234567@g.us');
+  check('chat.id._serialized rebuilt', chat.id._serialized, '1@g.us');
 
   // legacy build must be untouched
-  const legacy = new Message(fakeClient, json({
+  const legacy = new Message(fakeClient, serialize({
     id: { _serialized: 'true_1@c.us_X' }, from: { _serialized: '1@c.us' }, body: 'x',
   }));
   check('legacy id', legacy.id._serialized, 'true_1@c.us_X');

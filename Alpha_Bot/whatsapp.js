@@ -102,6 +102,11 @@ const state = {
 // between builds — the second outage here was `$1` coming back as an object
 // rather than the serialized string — so both sides match on the SHAPE of the
 // value and refuse to yield anything that is not a string.
+//
+// For the record, on WA Web 2.3000.1045737606 the WID class is NOT renamed at
+// all: it still carries `server`, `user` and `_serialized` as own properties,
+// and `$1` there is a method. Only MsgKey is affected. The WID getter below is
+// left installed because it no-ops when the own property is present.
 
 // Shapes a serialized JID/message-key takes once it has crossed into Node.
 const WID_RE = /^[^@\s]*@[a-z0-9.-]+$/i;
@@ -168,6 +173,14 @@ function patchNodeSideIds() {
 
   const origChatPatch = Chat.prototype._patch;
   Chat.prototype._patch = function (data) {
+    // The library builds `new Message(client, data.lastMessage)` unconditionally
+    // and immediately reads `data.id.id`, so a lastMessage that arrived without
+    // a usable id throws — and because getChats() maps over every chat, that one
+    // bad preview takes the entire group list down. Losing a preview is
+    // survivable; losing the group list is not.
+    if (data && data.lastMessage && typeof data.lastMessage.id !== 'object') {
+      data = { ...data, lastMessage: undefined };
+    }
     const result = origChatPatch.call(this, data);
     normalizeIdObject(this.id);
     return result;
@@ -317,6 +330,16 @@ async function installSerializedShim() {
         if (!proto || Object.prototype.hasOwnProperty.call(proto, '_serialized')) return;
         Object.defineProperty(proto, '_serialized', {
           get() { return resolver(this); },
+          // A setter is NOT optional. WhatsApp's own constructors assign
+          // `this._serialized = ...`, and assigning through an inherited
+          // getter-only accessor throws in strict mode — which would break
+          // every construction of the class we were trying to repair. Writing
+          // an own data property also means later reads skip the resolver.
+          set(value) {
+            Object.defineProperty(this, '_serialized', {
+              value, writable: true, enumerable: true, configurable: true,
+            });
+          },
           configurable: true,
         });
         patched.push(label);
@@ -328,8 +351,14 @@ async function installSerializedShim() {
       } catch { /* module gone — nothing to alias */ }
 
       try {
-        const wid = window.require('WAWebWidFactory').createWid('12345@c.us');
-        install('Wid', Object.getPrototypeOf(wid), widString);
+        const probe = window.require('WAWebWidFactory').createWid('12345@c.us');
+        // Only patch WID if this build actually renamed it. As of WA Web
+        // 2.3000.1045737606 it did not — `server`, `user` and `_serialized` are
+        // all still own properties — and patching a class that works is how you
+        // create new outages rather than fix them.
+        if (typeof probe._serialized !== 'string') {
+          install('Wid', Object.getPrototypeOf(probe), widString);
+        }
       } catch { /* factory shape changed — leave WID alone */ }
 
       // Belt and braces: an id we still failed to decode would reach
@@ -363,13 +392,29 @@ async function installSerializedShim() {
       const wrapModel = (name, resolver) => {
         const original = window.WWebJS?.[name];
         if (typeof original !== 'function' || original.__alphaBotWrapped) return;
-        const wrapper = async function (...callArgs) {
-          const model = await original.apply(this, callArgs);
+
+        // A renamed MsgKey loses more than `_serialized` on the way out: the
+        // library also reads `data.id.id` (for deviceType) and `msg.id.remote`
+        // (to resolve the chat). Split the serialized form back into those
+        // canonical fields so the Node side sees a well-formed key.
+        const restoreKeyParts = (target, serialized) => {
+          if (!target || typeof target !== 'object' || typeof serialized !== 'string') return;
+          const parts = serialized.split('_');
+          if (parts.length < 3) return;
+          if (typeof target.fromMe !== 'boolean') target.fromMe = parts[0] === 'true';
+          if (target.remote == null) target.remote = parts[1];
+          if (typeof target.id !== 'string') target.id = parts[2];
+          if (parts[3] && target.participant == null) target.participant = parts[3];
+        };
+
+        const decorate = (model, live) => {
           try {
-            const live = callArgs[0];
             if (model?.id && typeof model.id === 'object' && typeof model.id._serialized !== 'string') {
               const serialized = resolver(live?.id) || resolver(model.id);
-              if (serialized) model.id._serialized = serialized;
+              if (serialized) {
+                model.id._serialized = serialized;
+                if (resolver === msgKeyString) restoreKeyParts(model.id, serialized);
+              }
             }
             // Message#from/to/author are WIDs the library flattens via
             // `._serialized`; give them the same treatment.
@@ -387,6 +432,21 @@ async function installSerializedShim() {
             }
           } catch { /* leave the model as-is */ }
           return model;
+        };
+
+        // Preserve the original's sync/async contract. getMessageModel is
+        // SYNCHRONOUS and its caller assigns the result straight into the chat
+        // model (`model.lastMessage = getMessageModel(...)`). An earlier version
+        // of this wrapper was declared `async`, so it stored a Promise there;
+        // that reached Node as `{}` and crashed Message._patch on `data.id.id`.
+        // getChatModel, by contrast, really is async — hence the thenable check
+        // rather than a hardcoded choice.
+        const wrapper = function (...callArgs) {
+          const output = original.apply(this, callArgs);
+          if (output && typeof output.then === 'function') {
+            return output.then((model) => decorate(model, callArgs[0]));
+          }
+          return decorate(output, callArgs[0]);
         };
         wrapper.__alphaBotWrapped = true;
         window.WWebJS[name] = wrapper;

@@ -246,6 +246,9 @@ textarea { resize: vertical; }
   user-select: none;
   transition: border-color .15s, background .15s;
   position: relative;
+  /* Grid items default to min-width:auto, so a long group name widens the
+     column past its 1fr share and pushes the selection tick off-screen. */
+  min-width: 0;
 }
 .group-item input[type=checkbox] { display: none; }
 .group-item:hover { border-color: var(--primary); }
@@ -253,7 +256,10 @@ textarea { resize: vertical; }
 
 .group-icon { font-size: 1.1rem; flex-shrink: 0; }
 .group-name { font-size: .85rem; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.checkmark { color: var(--primary); font-weight: 800; opacity: 0; transition: opacity .15s; }
+/* The member-count line is a block child of a nowrap parent, so it needs its
+   own ellipsis or it sets the card's min-content width. */
+.group-name small { display: block; overflow: hidden; text-overflow: ellipsis; }
+.checkmark { color: var(--primary); font-weight: 800; opacity: 0; transition: opacity .15s; flex-shrink: 0; }
 .group-item.checked .checkmark { opacity: 1; }
 
 .selected-count {
@@ -371,9 +377,70 @@ textarea { resize: vertical; }
 ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
 
 /* ── Responsive ───────────────────────────────────────────────── */
+/* Nothing here may overflow horizontally: the panel is used one-handed on a
+   phone, and a sideways-scrolling page makes the group picker unusable. */
+@media (max-width: 900px) {
+  .container { padding: 1.5rem 1rem; }
+  .card { padding: 1.35rem; }
+  /* The grid's fixed 480px cap wastes most of a phone screen and leaves the
+     "Save" button stranded below the fold. */
+  .group-grid { max-height: 62vh; }
+}
+
 @media (max-width: 600px) {
   .container { padding: 1rem .85rem; }
+  .card { padding: 1.1rem; }
   .group-grid { grid-template-columns: 1fr 1fr; }
   .tabs { gap: .25rem; }
   .tab-btn { padding: .4rem .7rem; font-size: .78rem; }
+
+  /* Navbar: brand keeps the top line, the links drop to their own row rather
+     than being squeezed off the right edge. */
+  .navbar { flex-wrap: wrap; gap: .6rem; padding: .7rem .85rem; }
+  .nav-brand { font-size: 1rem; }
+  .nav-links { width: 100%; justify-content: space-between; gap: .75rem; }
+
+  .page-header h2 { font-size: 1.2rem; }
+  .brand h1 { font-size: 1.5rem; }
+  .brand-icon { font-size: 2.4rem; }
+
+  /* Rows of controls stack instead of being crushed. */
+  .section-header { align-items: flex-start; }
+  .section-header .btn-group { width: 100%; }
+  .btn-group { flex-wrap: wrap; }
+  .btn-group .btn { flex: 1 1 auto; justify-content: center; }
+
+  /* A label with its control on the right becomes label-over-control. The
+     selects carry inline width:auto, hence the override. */
+  .toggle-label { flex-direction: column; align-items: stretch; gap: .5rem; }
+  .toggle-label > span { font-weight: 600; }
+  .toggle-label select,
+  .toggle-label .btn { width: 100% !important; }
+
+  .inline-form { gap: .5rem; }
+  .inline-form > .btn { width: 100%; }
+  /* Option labels here are full sentences ("Copy — send as a new message"). */
+  .inline-form > select { width: 100% !important; }
+
+  .schedule-item { flex-direction: column; align-items: stretch; gap: .6rem; }
+  .page-header { gap: .6rem; }
+
+  /* Long group names and result lines wrap instead of widening the page. */
+  .group-name,
+  .result-box li { overflow-wrap: anywhere; }
+  .result-box { overflow-x: auto; }
+
+  .qr-wrap img { width: 200px; height: 200px; }
+
+  /* 16px is the threshold below which iOS Safari zooms the page on focus,
+     which then leaves the layout scrolled sideways. */
+  input, select, textarea,
+  .search-input { font-size: 16px; }
+  .btn { padding: .6rem .9rem; }
+}
+
+@media (max-width: 400px) {
+  /* Two columns stop fitting a group name plus its member count. */
+  .group-grid { grid-template-columns: 1fr; }
+  .nav-links { gap: .5rem; font-size: .85rem; }
 }

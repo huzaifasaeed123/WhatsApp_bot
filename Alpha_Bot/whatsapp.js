@@ -773,10 +773,20 @@ async function refreshGroupMetadata(delayMs = 250) {
   return { total: ids.length, refreshed, failed };
 }
 
+// Every JID this account is known by. Groups list participants by phone number
+// or by LID depending on how the group is addressed, so collect whatever the
+// client reports and match against all of them.
+function ownJids() {
+  const info = client.info || {};
+  return [info.wid, info.me, info.lid]
+    .map(serializedId)
+    .filter(Boolean);
+}
+
 async function getAllGroups({ refresh = false } = {}) {
   if (refresh) await refreshGroupMetadata();
   const chats = await client.getChats();
-  const groups = chats
+  const all = chats
     .filter((c) => c.isGroup)
     .map((c) => {
       // Participant JIDs already come back from getChats() — no extra API call.
@@ -789,8 +799,38 @@ async function getAllGroups({ refresh = false } = {}) {
         memberCount: memberIds.length,
         memberIds, // used to compute unique (de-duplicated) totals across groups
       };
+    });
+
+  // Groups this account has left (or was removed from) stay in WhatsApp's chat
+  // list forever. They are useless here — you cannot post to them — and they
+  // were showing up as "0 members" entries in the picker.
+  const mine = ownJids();
+
+  // Only trust the "is my JID in the participants" test if our own JID actually
+  // turns up somewhere. On an account whose groups are LID-addressed while
+  // client.info reports a phone number (or the reverse), it would match nothing
+  // and hide every single group.
+  const jidFormMatches =
+    mine.length > 0 && all.some((g) => g.memberIds.some((id) => mine.includes(id)));
+
+  const groups = all
+    .filter((g) => {
+      // A group you are still in always contains at least you, so an empty
+      // participant list means you are not in it. This alone covers the
+      // "0 members" rows, and holds regardless of JID format.
+      if (g.memberIds.length === 0) return false;
+      if (!jidFormMatches) return true;
+      return g.memberIds.some((id) => mine.includes(id));
     })
     .sort((a, b) => b.memberCount - a.memberCount); // most members first
+
+  const hidden = all.length - groups.length;
+  if (hidden > 0) {
+    console.log(
+      `Hiding ${hidden} group(s) this account is no longer a member of` +
+      `${jidFormMatches ? '' : ' (by empty participant list only — own JID not found in any group)'}.`
+    );
+  }
 
   // Refresh cache so later lookups (e.g. selection save) need no WhatsApp call.
   groupCache = new Map(groups.map((g) => [g.id, g]));

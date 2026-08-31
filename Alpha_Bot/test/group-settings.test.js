@@ -120,6 +120,65 @@ const makeChat = (log) => ({
   const unparsedBody = await runMiddleware(urlencodedOnly);
   check('express.urlencoded leaves multipart unparsed', unparsedBody, {});
 
+  // --- groups the account has left must not reach the picker --------------
+  console.log('\n─── left-group filtering ───');
+
+  const ME = '923001112222@c.us';
+  const chat = (name, members) => ({
+    isGroup: true,
+    id: { _serialized: `${name}@g.us` },
+    name,
+    participants: members.map((m) => ({ id: { _serialized: m } })),
+  });
+
+  const listGroups = async (chats, info) => {
+    wa.client.info = info;
+    wa.client.getChats = async () => chats;
+    return (await wa.getAllGroups()).map((g) => g.name);
+  };
+
+  // Left groups keep sitting in WhatsApp's chat list with an empty participant
+  // list — these are the "0 members" rows.
+  check('empty group hidden', await listGroups([
+    chat('active', [ME, '1@c.us']),
+    chat('left', []),
+  ], { wid: { _serialized: ME } }), ['active']);
+
+  // Metadata can still list the other members after you are removed, so an
+  // explicit membership check is needed too.
+  check('group without me hidden', await listGroups([
+    chat('mine', [ME, '1@c.us', '2@c.us']),
+    chat('removed', ['1@c.us', '2@c.us']),
+  ], { wid: { _serialized: ME } }), ['mine']);
+
+  // Ordering (largest first) and the rest of the shape must survive filtering.
+  check('surviving groups still sorted by size', await listGroups([
+    chat('small', [ME, '1@c.us']),
+    chat('big', [ME, '1@c.us', '2@c.us', '3@c.us']),
+    chat('gone', []),
+  ], { wid: { _serialized: ME } }), ['big', 'small']);
+
+  // SAFETY: if our own JID never appears — e.g. client.info reports a phone
+  // number while the groups are LID-addressed — the membership test must be
+  // abandoned rather than hiding every group.
+  check('unmatched own JID does not wipe the list', await listGroups([
+    chat('lid-a', ['111@lid', '222@lid']),
+    chat('lid-b', ['333@lid']),
+    chat('empty', []),
+  ], { wid: { _serialized: ME } }), ['lid-a', 'lid-b']);
+
+  // Same guard when the client reports no identity at all.
+  check('missing client.info does not wipe the list', await listGroups([
+    chat('a', ['1@c.us', '2@c.us']),
+    chat('empty', []),
+  ], null), ['a']);
+
+  // A LID-addressed account should match on whichever JID form it reports.
+  check('matches on client.info.lid', await listGroups([
+    chat('mine', ['999@lid', '111@lid']),
+    chat('removed', ['111@lid']),
+  ], { wid: { _serialized: ME }, lid: { _serialized: '999@lid' } }), ['mine']);
+
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })();

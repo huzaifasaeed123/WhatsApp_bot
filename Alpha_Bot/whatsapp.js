@@ -610,6 +610,74 @@ async function installSerializedShim() {
         chatLookupHardened = true;
       }
 
+      // ── Media sends ───────────────────────────────────────────────────────
+      // WWebJS.sendMessage builds the outgoing message as
+      //
+      //     { ...options, id: newMsgKey, ..., ...mediaOptions,
+      //       ...(mediaOptions.toJSON ? mediaOptions.toJSON() : {}), ... }
+      //
+      // The media data is spread AFTER `id: newMsgKey`, so any `id` it carries
+      // replaces the message key. The message is then memoized by something
+      // that is not a MsgKey and has no _serialized, which is the "Data passed
+      // to getter must include an id property" failure. It can only happen when
+      // media is attached — matching a run where text arrives and media does
+      // not.
+      //
+      // The model itself is left untouched (WhatsApp uses it for the upload);
+      // only the two things that get spread are shielded. toJSON is wrapped to
+      // omit id, and the model gets a non-enumerable id so the spread skips it
+      // while direct reads still work.
+      let mediaIdShielded = false;
+      let mediaCarriedId = null;
+      const origProcessMediaData = window.WWebJS?.processMediaData;
+      if (
+        typeof origProcessMediaData === 'function' &&
+        !origProcessMediaData.__alphaBotShielded
+      ) {
+        const shield = (mediaData) => {
+          if (!mediaData || typeof mediaData !== 'object') return mediaData;
+
+          try {
+            const descriptor = Object.getOwnPropertyDescriptor(mediaData, 'id');
+            if (descriptor && descriptor.enumerable) {
+              mediaCarriedId = typeof mediaData.id;
+              // Keep the value, hide it from object spread.
+              Object.defineProperty(mediaData, 'id', {
+                ...descriptor,
+                enumerable: false,
+              });
+              mediaIdShielded = true;
+            }
+          } catch { /* leave the model alone */ }
+
+          try {
+            const origToJSON = mediaData.toJSON;
+            if (typeof origToJSON === 'function' && !origToJSON.__alphaBotShielded) {
+              const wrapped = function (...args) {
+                const json = origToJSON.apply(this, args);
+                if (json && typeof json === 'object' && 'id' in json) {
+                  mediaCarriedId = mediaCarriedId || 'in toJSON';
+                  mediaIdShielded = true;
+                  const { id, ...rest } = json;
+                  return rest;
+                }
+                return json;
+              };
+              wrapped.__alphaBotShielded = true;
+              mediaData.toJSON = wrapped;
+            }
+          } catch { /* leave toJSON alone */ }
+
+          return mediaData;
+        };
+
+        const wrapper = async function (...args) {
+          return shield(await origProcessMediaData.apply(this, args));
+        };
+        wrapper.__alphaBotShielded = true;
+        window.WWebJS.processMediaData = wrapper;
+      }
+
       // ── Forwarding ────────────────────────────────────────────────────────
       // The library hardcodes window.require('WAWebChatForwardMessage'), and on
       // this build that name resolves to undefined — every forward died on
@@ -741,6 +809,9 @@ async function installSerializedShim() {
         forwardModule: resolved ? forwardModuleSource : null,
         registryReachable,
         chatLookupHardened,
+        mediaShieldInstalled:
+          typeof window.WWebJS?.processMediaData === 'function' &&
+          !!window.WWebJS.processMediaData.__alphaBotShielded,
         version: window.Debug?.VERSION || 'unknown',
       };
     });
@@ -754,6 +825,7 @@ async function installSerializedShim() {
     if (result.wrappedModels.length) console.log(`Materializing ids for: ${result.wrappedModels.join(', ')}.`);
     console.log('MsgKey decode check:', result.sample);
     if (result.chatLookupHardened) console.log('Hardened chat lookup installed.');
+    if (result.mediaShieldInstalled) console.log('Media-send key shield installed.');
     if (result.forwardModule) {
       console.log(`Forwarding available via ${result.forwardModule}.`);
       forwardSupported = true;
@@ -945,6 +1017,7 @@ client.on('message', async (message) => {
 
   let sent = 0;
   let failed = 0;
+  let partial = 0;
   let diagnosed = false;
   try {
     // Forward mode only if this build can actually forward. Otherwise fall back
@@ -987,6 +1060,13 @@ client.on('message', async (message) => {
         }
         sent++;
       } catch (err) {
+        // The text still reached the group; record it and move on.
+        if (err.partial) {
+          sent++;
+          partial++;
+          await sleep(2000 + state.delaySeconds * 1000);
+          continue;
+        }
         // A forward can fail for one group while a plain copy still works, so
         // try the copy before giving up on this group.
         let recovered = false;
@@ -1020,7 +1100,10 @@ client.on('message', async (message) => {
       }
       await sleep(2000 + state.delaySeconds * 1000);
     }
-    console.log(`Auto-forward complete: ${sent} sent, ${failed} failed.`);
+    console.log(
+      `Auto-forward complete: ${sent} sent, ${failed} failed` +
+      `${partial ? `, ${partial} of those text-only (media failed)` : ''}.`
+    );
   } catch (err) {
     console.error('Auto-forward error:', err.message);
   } finally {
@@ -1148,11 +1231,55 @@ async function traceSendFailure(groupId, text) {
         out.newMsgKeyId = typeof newId;
       } catch (e) { out.newMsgKey = stringify(e); return out; }
 
-      // The real thing. This is the call that fails in production.
+      // Text first, to keep the previous signal.
       try {
         const msg = await window.WWebJS.sendMessage(chat, body, {});
-        out.sendMessage = msg ? 'SUCCEEDED' : 'returned falsy';
-      } catch (e) { out.sendMessage = stringify(e); }
+        out.sendMessageText = msg ? 'SUCCEEDED' : 'returned falsy';
+      } catch (e) { out.sendMessageText = stringify(e); }
+
+      // Then the media path, which is what the real sends use. A 1x1 PNG keeps
+      // this cheap and deterministic.
+      const tinyPng =
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+      let mediaData;
+      try {
+        mediaData = await window.WWebJS.processMediaData(
+          { mimetype: 'image/png', data: tinyPng, filename: 'probe.png', filesize: 68 },
+          { forceVoice: false, forceDocument: false, forceGif: false }
+        );
+        out.processMediaData = mediaData ? 'ok' : 'returned falsy';
+      } catch (e) { out.processMediaData = stringify(e); }
+
+      // The crux: does the media data carry an `id` that would overwrite the
+      // message key when it is spread over the message object?
+      if (mediaData) {
+        try {
+          const ownId = Object.getOwnPropertyDescriptor(mediaData, 'id');
+          out.mediaOwnId = ownId
+            ? `present (enumerable=${ownId.enumerable}, type=${typeof mediaData.id})`
+            : 'absent';
+        } catch (e) { out.mediaOwnId = 'probe threw ' + e.message; }
+
+        try {
+          const json = typeof mediaData.toJSON === 'function' ? mediaData.toJSON() : null;
+          out.mediaToJsonId = !json
+            ? 'no toJSON'
+            : 'id' in json
+              ? `PRESENT (type=${typeof json.id}) — this overwrites the message key`
+              : 'absent';
+          out.mediaToJsonKeys = json
+            ? Object.keys(json).slice(0, 14).join(',')
+            : 'n/a';
+        } catch (e) { out.mediaToJsonId = 'probe threw ' + e.message; }
+      }
+
+      try {
+        const msg = await window.WWebJS.sendMessage(chat, '', {
+          media: { mimetype: 'image/png', data: tinyPng, filename: 'probe.png', filesize: 68 },
+          caption: 'probe',
+        });
+        out.sendMessageMedia = msg ? 'SUCCEEDED' : 'returned falsy';
+      } catch (e) { out.sendMessageMedia = stringify(e); }
 
       return out;
     }, groupId, text || 'diagnostic');
@@ -1183,7 +1310,23 @@ async function sendToGroup(groupId, text, media, mediaType) {
       opts.sendMediaAsDocument = true;
     }
     if (text) opts.caption = text;
-    await client.sendMessage(groupId, media, opts);
+    try {
+      await client.sendMessage(groupId, media, opts);
+      return;
+    } catch (err) {
+      // Media sending is the fragile half: it depends on upload, on the media
+      // model, and on whatever WhatsApp renamed this week. If there is text to
+      // carry, deliver that rather than letting the group receive nothing, and
+      // report it as a partial send instead of swallowing it.
+      if (!text) throw err;
+      console.warn(
+        `Media send failed for ${groupId} (${err.message}) — sending the text alone.`
+      );
+      await client.sendMessage(groupId, text);
+      const partial = new Error(`media failed, text sent: ${err.message}`);
+      partial.partial = true;
+      throw partial;
+    }
   } else if (text) {
     await client.sendMessage(groupId, text);
   }

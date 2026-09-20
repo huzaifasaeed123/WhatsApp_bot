@@ -143,6 +143,17 @@ const window = {
     },
     // ASYNC in the real library (Injected/Utils.js:938).
     async getChat() { return collections.Chat.get(); },
+    async processMediaData() {
+      const mediaData = {
+        id: 'media-object-id-not-a-msgkey',
+        mimetype: 'image/png',
+        filehash: 'abc123',
+        toJSON() {
+          return { id: 'media-object-id-not-a-msgkey', mimetype: 'image/png', filehash: 'abc123' };
+        },
+      };
+      return mediaData;
+    },
     async getChatModel(chat) {
       const model = { id: serialize(chat.id), formattedTitle: 'T', isGroup: true, lastMessage: null };
       // mirrors Injected/Utils.js:996-999
@@ -334,6 +345,43 @@ check('getMessageModel id materialized', syncModel.id._serialized, 'false_120363
   // The direction marker must never be picked up as the message id.
   check('selfDir not mistaken for the id',
     outgoingGroup._serialized.includes('_out_'), false);
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // 6. Media sends must not clobber the message key.
+  // ─────────────────────────────────────────────────────────────────────────
+  console.log('\n─── media key shield ───');
+  check('media shield installed', result.mediaShieldInstalled, true);
+
+  const media = await window.WWebJS.processMediaData(
+    { mimetype: 'image/png', data: 'x' }, {}
+  );
+
+  // The value is preserved for WhatsApp's own use...
+  check('media id still readable directly', media.id, 'media-object-id-not-a-msgkey');
+  // ...but must not travel through object spread, which is how it reached
+  // `message.id` and replaced the MsgKey.
+  check('media id excluded from spread',
+    Object.prototype.hasOwnProperty.call({ ...media }, 'id'), false);
+  check('media id excluded from toJSON',
+    Object.prototype.hasOwnProperty.call(media.toJSON(), 'id'), false);
+  check('other media fields survive spread', { ...media }.filehash, 'abc123');
+  check('other media fields survive toJSON', media.toJSON().mimetype, 'image/png');
+
+  // The end result: building the message the way the library does leaves the
+  // MsgKey intact.
+  const newMsgKey = new OutgoingMsgKey(
+    new RealWid('120363162234460479', 'g.us'), 'KEEPME', new RealWid('923001112222', 'c.us')
+  );
+  Object.setPrototypeOf(newMsgKey, MinifiedMsgKey.prototype);
+  const built = {
+    id: newMsgKey,
+    body: '',
+    ...media,
+    ...(media.toJSON ? media.toJSON() : {}),
+  };
+  check('message.id survives the media spread', built.id, newMsgKey);
+  check('message.id still serializes', built.id._serialized,
+    'true_120363162234460479@g.us_KEEPME_923001112222@c.us');
 
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);

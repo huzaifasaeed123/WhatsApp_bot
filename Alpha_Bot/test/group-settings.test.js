@@ -179,6 +179,74 @@ const makeChat = (log) => ({
     chat('removed', ['111@lid']),
   ], { wid: { _serialized: ME }, lid: { _serialized: '999@lid' } }), ['mine']);
 
+  // --- sendToGroup's media fallback chain ---------------------------------
+  // Delivery now depends on this ordering, so it is pinned: typed media first,
+  // then the same bytes as a document, then the text alone. Each step only
+  // happens because the previous one failed.
+  console.log('\n─── media fallback chain ───');
+
+  const attempts = [];
+  const installSend = (behaviour) => {
+    wa.client.sendMessage = async (id, content, opts) => {
+      attempts.push({
+        asDocument: !!opts?.sendMediaAsDocument,
+        isText: typeof content === 'string',
+      });
+      const outcome = behaviour(attempts.length);
+      if (outcome instanceof Error) throw outcome;
+      return outcome;
+    };
+  };
+  const media = { mimetype: 'image/jpeg', data: 'xxx' };
+
+  // 1. Typed media works: one attempt, nothing else tried.
+  attempts.length = 0;
+  installSend(() => ({ ok: true }));
+  await wa.sendToGroup('g@g.us', 'caption', media, 'image');
+  check('typed media send, no fallback', attempts, [{ asDocument: false, isText: false }]);
+
+  // 2. Typed media fails, document succeeds: no text-only send, no throw.
+  attempts.length = 0;
+  installSend((n) => (n === 1 ? new Error('prep failed') : { ok: true }));
+  let threw = null;
+  try { await wa.sendToGroup('g@g.us', 'caption', media, 'image'); }
+  catch (e) { threw = e.message; }
+  check('falls back to document', attempts, [
+    { asDocument: false, isText: false },
+    { asDocument: true, isText: false },
+  ]);
+  check('document success is not an error', threw, null);
+
+  // 3. Both media attempts fail: the text still goes, reported as partial.
+  attempts.length = 0;
+  installSend((n) => (n <= 2 ? new Error('prep failed') : { ok: true }));
+  let partialErr = null;
+  try { await wa.sendToGroup('g@g.us', 'caption', media, 'image'); }
+  catch (e) { partialErr = e; }
+  check('text sent after both media attempts', attempts, [
+    { asDocument: false, isText: false },
+    { asDocument: true, isText: false },
+    { asDocument: false, isText: true },
+  ]);
+  check('reported as partial', partialErr?.partial, true);
+
+  // 4. Media with no caption and nothing works: a real failure, not a partial.
+  attempts.length = 0;
+  installSend(() => new Error('prep failed'));
+  let hardErr = null;
+  try { await wa.sendToGroup('g@g.us', '', media, 'image'); }
+  catch (e) { hardErr = e; }
+  check('no text to fall back on is a hard failure', hardErr?.partial, undefined);
+
+  // 5. A document-typed message must not be retried as a document twice.
+  attempts.length = 0;
+  installSend((n) => (n === 1 ? new Error('prep failed') : { ok: true }));
+  try { await wa.sendToGroup('g@g.us', 'caption', media, 'document'); } catch { /* partial */ }
+  check('document type not retried as document', attempts, [
+    { asDocument: true, isText: false },
+    { asDocument: false, isText: true },
+  ]);
+
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })();

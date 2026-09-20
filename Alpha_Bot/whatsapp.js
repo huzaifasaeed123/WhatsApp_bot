@@ -1060,10 +1060,16 @@ client.on('message', async (message) => {
         }
         sent++;
       } catch (err) {
-        // The text still reached the group; record it and move on.
+        // The text still reached the group; record it and move on. The media
+        // half still failed, so diagnose it once — a partial delivery is still
+        // a failure worth explaining.
         if (err.partial) {
           sent++;
           partial++;
+          if (!diagnosed) {
+            diagnosed = true;
+            await traceMediaFailure(group.id, message);
+          }
           await sleep(2000 + state.delaySeconds * 1000);
           continue;
         }
@@ -1301,6 +1307,127 @@ async function traceSendFailure(groupId, text) {
   }
 }
 
+// Walk WWebJS.processMediaData's own steps with the real media, so the failing
+// one is named. The library calls getOrCreateMediaObject(mediaData.filehash)
+// BEFORE its own `if (!mediaData.filehash) throw` guard (Injected/Utils.js:718
+// vs :725), so an undefined filehash surfaces as the memoized store's
+// "Data passed to getter must include an id property" rather than as the
+// library's own clear message. This distinguishes the two.
+async function traceMediaFailure(groupId, message) {
+  let media;
+  try {
+    media = message.hasMedia ? await message.downloadMedia() : null;
+  } catch (err) {
+    console.error('─── Media trace ───');
+    console.error('  downloadMedia THREW:', err.message);
+    console.error('───────────────────');
+    return;
+  }
+  if (!media) {
+    console.error('─── Media trace ───');
+    console.error('  downloadMedia returned nothing — there is no media to send.');
+    console.error('───────────────────');
+    return;
+  }
+
+  console.error('─── Media trace ───');
+  console.error(`  mimetype: ${media.mimetype}`);
+  console.error(`  filename: ${media.filename ?? '(none)'}`);
+  console.error(`  filesize: ${media.filesize ?? '(none)'}`);
+  console.error(`  data length: ${media.data ? media.data.length : 0} base64 chars`);
+  console.error(`  message type: ${message.type}`);
+
+  try {
+    const report = await client.pupPage.evaluate(async (mediaInfo, opts) => {
+      const out = {};
+      const stringify = (e) => `${e?.name}: ${e?.message}`;
+
+      let file;
+      try {
+        file = window.WWebJS.mediaInfoToFile(mediaInfo);
+        out.mediaInfoToFile = `ok (type=${file?.type}, size=${file?.size})`;
+      } catch (e) { out.mediaInfoToFile = 'THREW ' + stringify(e); return out; }
+
+      let opaqueData;
+      try {
+        opaqueData = await window
+          .require('WAWebMediaOpaqueData')
+          .createFromData(file, mediaInfo.mimetype);
+        out.createFromData = opaqueData ? 'ok' : 'returned falsy';
+      } catch (e) { out.createFromData = 'THREW ' + stringify(e); return out; }
+
+      let mediaData;
+      try {
+        const mediaPrep = window.require('WAWebPrepRawMedia').prepRawMedia(opaqueData, {
+          asSticker: false,
+          asGif: false,
+          isPtt: !!opts.forceVoice,
+          asDocument: !!opts.forceDocument,
+        });
+        mediaData = await mediaPrep.waitForPrep();
+        out.waitForPrep = mediaData ? 'ok' : 'returned falsy';
+      } catch (e) { out.waitForPrep = 'THREW ' + stringify(e); return out; }
+
+      // The crux.
+      try {
+        out.filehash =
+          mediaData.filehash == null
+            ? 'MISSING — this is what getOrCreateMediaObject chokes on'
+            : `present (${String(mediaData.filehash).slice(0, 16)}…)`;
+        out.mediaDataType = String(mediaData.type);
+        out.mediaDataKeys = Object.keys(mediaData).slice(0, 14).join(',');
+      } catch (e) { out.filehash = 'probe threw ' + stringify(e); }
+
+      try {
+        const mediaObject = window
+          .require('WAWebMediaStorage')
+          .getOrCreateMediaObject(mediaData.filehash);
+        out.getOrCreateMediaObject = mediaObject ? 'ok' : 'returned falsy';
+      } catch (e) { out.getOrCreateMediaObject = 'THREW ' + stringify(e); }
+
+      try {
+        const mediaType = window.require('WAWebMmsMediaTypes').msgToMediaType({
+          type: mediaData.type,
+          isGif: mediaData.isGif,
+          isNewsletter: false,
+        });
+        out.msgToMediaType = String(mediaType);
+      } catch (e) { out.msgToMediaType = 'THREW ' + stringify(e); }
+
+      // And the library's own path, end to end.
+      try {
+        const processed = await window.WWebJS.processMediaData(mediaInfo, {
+          forceSticker: false,
+          forceGif: false,
+          forceVoice: !!opts.forceVoice,
+          forceDocument: !!opts.forceDocument,
+          forceMediaHd: false,
+          sendToChannel: false,
+          sendToStatus: false,
+        });
+        out.processMediaData = processed ? 'SUCCEEDED' : 'returned falsy';
+      } catch (e) { out.processMediaData = 'THREW ' + stringify(e); }
+
+      return out;
+    }, {
+      mimetype: media.mimetype,
+      data: media.data,
+      filename: media.filename,
+      filesize: media.filesize,
+    }, {
+      forceVoice: message.type === 'audio' || message.type === 'ptt',
+      forceDocument: !['image', 'video'].includes(message.type),
+    });
+
+    for (const [key, value] of Object.entries(report)) {
+      console.error(`  ${key}: ${value}`);
+    }
+  } catch (err) {
+    console.error('  trace itself failed:', err.message);
+  }
+  console.error('───────────────────');
+}
+
 async function sendToGroup(groupId, text, media, mediaType) {
   if (media) {
     const opts = {};
@@ -1313,7 +1440,22 @@ async function sendToGroup(groupId, text, media, mediaType) {
     try {
       await client.sendMessage(groupId, media, opts);
       return;
-    } catch (err) {
+    } catch (firstErr) {
+      // Media prep is type-specific: image, video, gif, voice and sticker each
+      // take a different path, and only some of them break. Sending the same
+      // bytes as a document skips that prep entirely, so it often succeeds when
+      // the typed path does not. The file arrives as an attachment rather than
+      // an inline photo, which is a far better outcome than losing it.
+      if (!opts.sendMediaAsDocument) {
+        try {
+          await client.sendMessage(groupId, media, { ...opts, sendMediaAsDocument: true });
+          console.warn(
+            `Media send failed for ${groupId} (${firstErr.message}) — delivered as a document instead.`
+          );
+          return;
+        } catch { /* fall through to the text-only path */ }
+      }
+      const err = firstErr;
       // Media sending is the fragile half: it depends on upload, on the media
       // model, and on whatever WhatsApp renamed this week. If there is text to
       // carry, deliver that rather than letting the group receive nothing, and

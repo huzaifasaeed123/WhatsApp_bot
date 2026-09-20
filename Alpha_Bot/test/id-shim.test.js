@@ -69,7 +69,14 @@ const collections = {
       return { messages: [] };
     },
   },
-  Chat: { getModelsArray: () => [{ lastReceivedKey: brokenKey }] },
+  Chat: {
+    // Mirrors the live failure: the WID lookup yields an object with no id.
+    get: () => ({ id: undefined, broken: true }),
+    getModelsArray: () => [
+      { lastReceivedKey: brokenKey },
+      { id: new RealWid('120363427554847352', 'g.us'), name: 'good chat' },
+    ],
+  },
 };
 
 const serialize = (o) => JSON.parse(JSON.stringify(o));
@@ -94,6 +101,17 @@ const window = {
     if (name === 'WAWebMsgKey') return MinifiedMsgKey;
     if (name === 'WAWebWidFactory') return { createWid: (s) => new RealWid(...s.split('@').reverse().reverse()) };
     if (name === 'WAWebCollections') return collections;
+    if (name === 'WAWebChatGetters') return {
+      getIsNewsletter: (chat) => {
+        if (!chat || chat.id == null) {
+          throw new Error(
+            "Data passed to getter must include an id property (it's how we memoize) but got undefined"
+          );
+        }
+        return false;
+      },
+    };
+    if (name === 'WAWebFindChatAction') return { findOrCreateLatestChat: async () => null };
     throw new Error('module not found: ' + name);
   },
   WWebJS: {
@@ -108,7 +126,7 @@ const window = {
       return { id: serialize(message.id), from: serialize(message.from), body: 'hi' };
     },
     // ASYNC in the real library (Injected/Utils.js:938).
-    async getChat() { return { id: 'chat' }; },
+    async getChat() { return collections.Chat.get(); },
     async getChatModel(chat) {
       const model = { id: serialize(chat.id), formattedTitle: 'T', isGroup: true, lastMessage: null };
       // mirrors Injected/Utils.js:996-999
@@ -123,6 +141,8 @@ const window = {
 };
 
 const result = new Function('window', bodySrc)(window);
+const widStringFor = (wid) =>
+  wid == null ? undefined : typeof wid === 'string' ? wid : wid._serialized;
 
 console.log('\n─── page-side shim ───');
 check('patched prototypes', result.patched.join(','), 'MsgKey');
@@ -236,6 +256,31 @@ check('getMessageModel id materialized', syncModel.id._serialized, 'false_120363
   check('forwardMessages called once', forwardCalls.length, 1);
   check('forwarded with multicast', forwardCalls[0].multicast, true);
   check('caption included', forwardCalls[0].includeCaption, true);
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // 4. Chat lookup hardening.
+  // ─────────────────────────────────────────────────────────────────────────
+  console.log('\n─── chat lookup ───');
+  check('hardened lookup installed', result.chatLookupHardened, true);
+
+  // REGRESSION: the library's route returns a chat with no id, which sails past
+  // Client.sendMessage's `if (!chat)` guard and then throws inside
+  // getIsNewsletter. The hardened lookup must reject it and find the real one.
+  const looked = await window.WWebJS.getChat('120363427554847352@g.us', { getAsModel: false });
+  check('id-less chat rejected', looked?.broken, undefined);
+  check('real chat found by model scan', looked?.name, 'good chat');
+  check('returned chat has a usable id', widStringFor(looked?.id), '120363427554847352@g.us');
+
+  // And the result must now survive the getter that was throwing.
+  let getterError = null;
+  try {
+    window.require('WAWebChatGetters').getIsNewsletter(looked);
+  } catch (e) { getterError = e.message; }
+  check('getIsNewsletter accepts it', getterError, null);
+
+  // An id that resolves to nothing at all yields null rather than a broken object.
+  const missing = await window.WWebJS.getChat('000@g.us', { getAsModel: false });
+  check('unresolvable chat returns null', missing, null);
 
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);

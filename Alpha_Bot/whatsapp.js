@@ -334,6 +334,17 @@ async function installSerializedShim() {
         return `${fromMe}_${remote}_${id}` + (participant ? `_${participant}` : '');
       };
 
+      let forwardModule;
+      let forwardModuleSource = 'not resolved';
+      let chatLookupHardened = false;
+      // Whether the bundler's module registry is reachable at all. When it is
+      // not, the forward-module scan had nothing to walk, which is a different
+      // failure from "scanned everything and found nothing".
+      let registryReachable = false;
+      try {
+        registryReachable = !!window.require('__debug')?.modulesMap;
+      } catch { registryReachable = false; }
+
       const patched = [];
       const install = (label, proto, resolver) => {
         if (!proto || Object.prototype.hasOwnProperty.call(proto, '_serialized')) return;
@@ -464,6 +475,71 @@ async function installSerializedShim() {
       wrapModel('getMessageModel', msgKeyString);
       wrapModel('getChatModel', widString);
 
+      // ── Chat lookup ───────────────────────────────────────────────────────
+      // WWebJS.getChat resolves a chat id through Chat.get(chatWid), falling
+      // back to findOrCreateLatestChat. On this build that can hand back an
+      // object whose `id` is undefined. Client.sendMessage only guards against
+      // a falsy chat, so that object sails through into WWebJS.sendMessage,
+      // which immediately calls getIsNewsletter(chat) — and WhatsApp's memoized
+      // getter rejects it with "Data passed to getter must include an id
+      // property (it's how we memoize) but got undefined".
+      //
+      // So: try every route to the chat, and accept only a result that actually
+      // carries an id. A chat without one is useless downstream regardless.
+      const origGetChat = window.WWebJS?.getChat;
+      if (typeof origGetChat === 'function' && !origGetChat.__alphaBotHardened) {
+        const hasId = (chat) => {
+          if (!chat || chat.id == null) return false;
+          // An id that cannot produce a serialized string is just as unusable
+          // to WhatsApp's getters as a missing one.
+          return typeof chat.id === 'object' ? widString(chat.id) != null : true;
+        };
+
+        const hardened = async (chatId, options = {}) => {
+          const { getAsModel = true } = options;
+          const collections = () => window.require('WAWebCollections');
+          const makeWid = () => window.require('WAWebWidFactory').createWid(chatId);
+          let chat;
+
+          // 1. The library's own path, asked for the raw model so it cannot
+          //    recurse back through getChatModel.
+          try {
+            chat = await origGetChat(chatId, { ...options, getAsModel: false });
+          } catch { /* fall through */ }
+
+          // 2. Straight collection lookup by WID.
+          if (!hasId(chat)) {
+            try { chat = collections().Chat.get(makeWid()); } catch { /* fall through */ }
+          }
+
+          // 3. Scan the chats already loaded in the store. This is the route
+          //    that survives a Chat.get() whose memoization key has changed.
+          if (!hasId(chat)) {
+            try {
+              chat = collections()
+                .Chat.getModelsArray()
+                .find((candidate) => widString(candidate?.id) === chatId);
+            } catch { /* fall through */ }
+          }
+
+          // 4. Ask WhatsApp to materialise it.
+          if (!hasId(chat)) {
+            try {
+              chat = (
+                await window.require('WAWebFindChatAction').findOrCreateLatestChat(makeWid())
+              )?.chat;
+            } catch { /* fall through */ }
+          }
+
+          if (!hasId(chat)) return null;
+          return getAsModel ? await window.WWebJS.getChatModel(chat) : chat;
+        };
+
+        hardened.__alphaBotHardened = true;
+        window.WWebJS.getChat = hardened;
+        chatLookupHardened = true;
+      }
+
       // ── Forwarding ────────────────────────────────────────────────────────
       // The library hardcodes window.require('WAWebChatForwardMessage'), and on
       // this build that name resolves to undefined — every forward died on
@@ -475,8 +551,6 @@ async function installSerializedShim() {
       // scanning the bundler's module registry. The result is cached, and the
       // whole thing reports what it found so a future rename is visible in the
       // logs rather than as 32 identical failures.
-      let forwardModule;
-      let forwardModuleSource = 'not resolved';
 
       const findForwardModule = () => {
         if (forwardModule) return forwardModule;
@@ -595,6 +669,8 @@ async function installSerializedShim() {
         wrappedModels,
         sample,
         forwardModule: resolved ? forwardModuleSource : null,
+        registryReachable,
+        chatLookupHardened,
         version: window.Debug?.VERSION || 'unknown',
       };
     });
@@ -607,6 +683,7 @@ async function installSerializedShim() {
     if (result.guarded) console.log('Installed Msg.get/getMessagesById key guard.');
     if (result.wrappedModels.length) console.log(`Materializing ids for: ${result.wrappedModels.join(', ')}.`);
     console.log('MsgKey decode check:', result.sample);
+    if (result.chatLookupHardened) console.log('Hardened chat lookup installed.');
     if (result.forwardModule) {
       console.log(`Forwarding available via ${result.forwardModule}.`);
       forwardSupported = true;
@@ -614,8 +691,13 @@ async function installSerializedShim() {
       forwardSupported = false;
       console.warn(
         'Forwarding UNAVAILABLE: no WhatsApp Web module exposes forwardMessages() on this ' +
-        'build. Auto-forward will send copies instead, which lose the "Forwarded" tag and ' +
-        'any channel attribution.'
+        'build' +
+        (result.registryReachable
+          ? ' (module registry scanned).'
+          : ' — and the module registry (__debug) is not reachable, so only the known ' +
+            'names could be tried.') +
+        ' Auto-forward will send copies instead, which lose the "Forwarded" tag and any ' +
+        'channel attribution.'
       );
     }
     if (result.sample === 'FAILED TO DECODE') {
@@ -793,6 +875,7 @@ client.on('message', async (message) => {
 
   let sent = 0;
   let failed = 0;
+  let diagnosed = false;
   try {
     // Forward mode only if this build can actually forward. Otherwise fall back
     // to copies — losing the "Forwarded" tag is survivable, sending nothing at
@@ -856,6 +939,12 @@ client.on('message', async (message) => {
         if (!recovered) {
           failed++;
           console.error(`Failed to forward to ${group.name || group.id}:`, err.message);
+          // Every group fails the same way when the cause is page-side, so
+          // report the real reason once instead of 32 identical stacks.
+          if (!diagnosed) {
+            diagnosed = true;
+            await diagnoseSend(group.id);
+          }
         }
       }
       await sleep(2000 + state.delaySeconds * 1000);
@@ -872,6 +961,66 @@ client.on('message', async (message) => {
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+// Puppeteer flattens a page-side failure to its message, so a send that dies
+// inside WhatsApp's own bundle says nothing about which lookup produced the bad
+// value. Re-run the lookups in the page and report plain strings. Called at most
+// once per forward run — the answer is the same for every group.
+async function diagnoseSend(groupId) {
+  try {
+    const report = await client.pupPage.evaluate(async (chatId) => {
+      const out = { chatId };
+      const describe = (value) => {
+        if (value == null) return String(value);
+        if (typeof value !== 'object') return `${typeof value}:${String(value)}`;
+        return `{${Object.getOwnPropertyNames(value).slice(0, 10).join(',')}}`;
+      };
+
+      try {
+        const wid = window.require('WAWebWidFactory').createWid(chatId);
+        out.createWid = describe(wid);
+      } catch (e) { out.createWid = `THREW ${e.name}: ${e.message}`; }
+
+      try {
+        const wid = window.require('WAWebWidFactory').createWid(chatId);
+        const chat = window.require('WAWebCollections').Chat.get(wid);
+        out.chatGet = chat ? `found, id=${describe(chat.id)}` : 'returned null/undefined';
+      } catch (e) { out.chatGet = `THREW ${e.name}: ${e.message}`; }
+
+      try {
+        const match = window
+          .require('WAWebCollections')
+          .Chat.getModelsArray()
+          .find((c) => {
+            try { return c?.id?._serialized === chatId; } catch { return false; }
+          });
+        out.modelScan = match ? `found, id=${describe(match.id)}` : 'no match in loaded models';
+      } catch (e) { out.modelScan = `THREW ${e.name}: ${e.message}`; }
+
+      try {
+        const chat = await window.WWebJS.getChat(chatId, { getAsModel: false });
+        out.wwebjsGetChat = chat
+          ? `returned a chat, id=${describe(chat.id)}`
+          : 'returned null/undefined';
+        if (chat) {
+          try {
+            const { getIsNewsletter } = window.require('WAWebChatGetters');
+            getIsNewsletter(chat);
+            out.getIsNewsletter = 'ok';
+          } catch (e) { out.getIsNewsletter = `THREW ${e.name}: ${e.message}`; }
+        }
+      } catch (e) { out.wwebjsGetChat = `THREW ${e.name}: ${e.message}`; }
+
+      return out;
+    }, groupId);
+
+    console.error('─── Send diagnostic ───');
+    for (const [key, value] of Object.entries(report)) console.error(`  ${key}: ${value}`);
+    console.error('───────────────────────');
+  } catch (err) {
+    console.error('Send diagnostic itself failed:', err.message);
+  }
 }
 
 async function sendToGroup(groupId, text, media, mediaType) {

@@ -464,6 +464,115 @@ async function installSerializedShim() {
       wrapModel('getMessageModel', msgKeyString);
       wrapModel('getChatModel', widString);
 
+      // ── Forwarding ────────────────────────────────────────────────────────
+      // The library hardcodes window.require('WAWebChatForwardMessage'), and on
+      // this build that name resolves to undefined — every forward died on
+      // "Cannot read properties of undefined (reading 'forwardMessages')".
+      //
+      // WhatsApp renames bundle modules freely, so instead of swapping one
+      // hardcoded name for another, find whichever module actually exports a
+      // forwardMessages function: try the known names first, then fall back to
+      // scanning the bundler's module registry. The result is cached, and the
+      // whole thing reports what it found so a future rename is visible in the
+      // logs rather than as 32 identical failures.
+      let forwardModule;
+      let forwardModuleSource = 'not resolved';
+
+      const findForwardModule = () => {
+        if (forwardModule) return forwardModule;
+
+        const usable = (mod) => mod && typeof mod.forwardMessages === 'function';
+
+        for (const name of [
+          'WAWebChatForwardMessage',
+          'WAWebForwardMessagesAction',
+          'WAWebChatForwardMessageAction',
+          'WAWebForwardMessage',
+          'WAWebMsgForwardAction',
+        ]) {
+          let mod;
+          try { mod = window.require(name); } catch { continue; }
+          if (usable(mod)) {
+            forwardModule = mod;
+            forwardModuleSource = name;
+            return forwardModule;
+          }
+          if (usable(mod?.default)) {
+            forwardModule = mod.default;
+            forwardModuleSource = name + '.default';
+            return forwardModule;
+          }
+        }
+
+        // Nothing matched a known name — walk the registry. Every module whose
+        // id mentions forward is checked first, then everything else, because
+        // requiring an unrelated module can have side effects.
+        let registry;
+        try {
+          registry = window.require('__debug')?.modulesMap;
+        } catch { registry = undefined; }
+        if (!registry) return undefined;
+
+        const ids = Object.keys(registry);
+        const ordered = [
+          ...ids.filter((id) => /forward/i.test(id)),
+          ...ids.filter((id) => !/forward/i.test(id) && /^WAWeb/.test(id)),
+        ];
+
+        for (const id of ordered) {
+          let mod;
+          try { mod = window.require(id); } catch { continue; }
+          if (usable(mod)) {
+            forwardModule = mod;
+            forwardModuleSource = id + ' (found by scan)';
+            return forwardModule;
+          }
+          if (usable(mod?.default)) {
+            forwardModule = mod.default;
+            forwardModuleSource = id + '.default (found by scan)';
+            return forwardModule;
+          }
+        }
+        return undefined;
+      };
+
+      const resolved = findForwardModule();
+
+      // Replace the library's forwardMessage with one that uses whatever module
+      // was actually found, and that fails loudly and specifically when it
+      // cannot forward, so the Node side can fall back to sending a copy.
+      if (typeof window.WWebJS?.forwardMessage === 'function') {
+        window.WWebJS.forwardMessage = async (chatId, msgId) => {
+          const mod = findForwardModule();
+          if (!mod) {
+            throw new Error(
+              'FORWARD_UNAVAILABLE: no WhatsApp Web module exposing forwardMessages()'
+            );
+          }
+
+          const Msg = window.require('WAWebCollections').Msg;
+          const msg =
+            Msg.get(msgId) ||
+            (await Msg.getMessagesById([msgId]))?.messages?.[0];
+          if (!msg) {
+            throw new Error('FORWARD_UNAVAILABLE: source message not found in the store');
+          }
+
+          const chat = await window.WWebJS.getChat(chatId, { getAsModel: false });
+          if (!chat) {
+            throw new Error('FORWARD_UNAVAILABLE: destination chat not found');
+          }
+
+          return await mod.forwardMessages({
+            chat,
+            msgs: [msg],
+            multicast: true,
+            includeCaption: true,
+            appendedText: undefined,
+          });
+        };
+      }
+
       // Report what the resolver actually produces on this build, so the next
       // rename shows up in the logs as a decode failure instead of a stack.
       let sample = 'no chat carried a lastReceivedKey';
@@ -485,6 +594,7 @@ async function installSerializedShim() {
         guarded,
         wrappedModels,
         sample,
+        forwardModule: resolved ? forwardModuleSource : null,
         version: window.Debug?.VERSION || 'unknown',
       };
     });
@@ -497,6 +607,17 @@ async function installSerializedShim() {
     if (result.guarded) console.log('Installed Msg.get/getMessagesById key guard.');
     if (result.wrappedModels.length) console.log(`Materializing ids for: ${result.wrappedModels.join(', ')}.`);
     console.log('MsgKey decode check:', result.sample);
+    if (result.forwardModule) {
+      console.log(`Forwarding available via ${result.forwardModule}.`);
+      forwardSupported = true;
+    } else {
+      forwardSupported = false;
+      console.warn(
+        'Forwarding UNAVAILABLE: no WhatsApp Web module exposes forwardMessages() on this ' +
+        'build. Auto-forward will send copies instead, which lose the "Forwarded" tag and ' +
+        'any channel attribution.'
+      );
+    }
     if (result.sample === 'FAILED TO DECODE') {
       console.error(
         'WARNING: MsgKey could not be decoded on this build — WhatsApp likely ' +
@@ -635,11 +756,34 @@ process.on('uncaughtException', (err) => {
 // that interleave on the single Puppeteer page.
 let forwardInProgress = false;
 
+// Whether this WhatsApp Web build exposes a usable forwardMessages(). Set when
+// the shim is installed on 'ready'. When false, forward mode degrades to
+// sending copies rather than failing every group.
+let forwardSupported = false;
+
 // Auto-forward listener: messages arriving in the admin source group
 client.on('message', async (message) => {
-  if (!state.adminGroupId) return;
+  // These three gates used to return in silence, which made "the bot just does
+  // nothing" impossible to diagnose from the logs. Only messages that arrive in
+  // the configured admin group are reported, so this stays quiet in normal use
+  // rather than logging every message the account receives.
+  if (!state.adminGroupId) {
+    console.warn(
+      'Auto-forward skipped: no admin source group is configured. ' +
+      'Set one on the Groups page and save.'
+    );
+    return;
+  }
   if (message.from !== state.adminGroupId) return;
-  if (state.selectedGroups.length === 0) return;
+  if (state.selectedGroups.length === 0) {
+    console.warn('Auto-forward skipped: no groups are selected.');
+    return;
+  }
+
+  console.log(
+    `Auto-forward starting: ${state.selectedGroups.length} group(s), ` +
+    `mode=${state.forwardMode}, hasMedia=${message.hasMedia}.`
+  );
 
   if (forwardInProgress) {
     console.warn('Forward already running — skipping this message.');
@@ -650,11 +794,19 @@ client.on('message', async (message) => {
   let sent = 0;
   let failed = 0;
   try {
+    // Forward mode only if this build can actually forward. Otherwise fall back
+    // to copies — losing the "Forwarded" tag is survivable, sending nothing at
+    // all is not.
+    const useForward = state.forwardMode === 'forward' && forwardSupported;
+    if (state.forwardMode === 'forward' && !forwardSupported) {
+      console.warn('Forward mode requested but unavailable on this build — sending copies.');
+    }
+
     // In forward mode WhatsApp moves the original message itself, so there is
     // nothing to download — and downloading is the step most likely to fail on
     // a channel post, whose media the bot may not be able to fetch directly.
     let media = null;
-    if (state.forwardMode !== 'forward' && message.hasMedia) {
+    if (!useForward && message.hasMedia) {
       media = await message.downloadMedia();
     }
 
@@ -669,7 +821,7 @@ client.on('message', async (message) => {
       }
 
       try {
-        if (state.forwardMode === 'forward') {
+        if (useForward) {
           // A real WhatsApp forward. Keeps whatever context the original
           // carried — the "Forwarded" tag, and for a post that originated in a
           // channel, the channel header and its "View channel" footer, because
@@ -682,8 +834,29 @@ client.on('message', async (message) => {
         }
         sent++;
       } catch (err) {
-        failed++;
-        console.error(`Failed to forward to ${group.name || group.id}:`, err.message);
+        // A forward can fail for one group while a plain copy still works, so
+        // try the copy before giving up on this group.
+        let recovered = false;
+        if (useForward) {
+          try {
+            const fallbackMedia = message.hasMedia ? await message.downloadMedia() : null;
+            await sendToGroup(group.id, message.body, fallbackMedia, message.type);
+            recovered = true;
+            sent++;
+            console.warn(
+              `Forward failed for ${group.name || group.id} (${err.message}) — sent a copy instead.`
+            );
+          } catch (fallbackErr) {
+            console.error(
+              `Copy fallback also failed for ${group.name || group.id}:`,
+              fallbackErr.message
+            );
+          }
+        }
+        if (!recovered) {
+          failed++;
+          console.error(`Failed to forward to ${group.name || group.id}:`, err.message);
+        }
       }
       await sleep(2000 + state.delaySeconds * 1000);
     }
@@ -813,8 +986,26 @@ async function getAllGroups({ refresh = false } = {}) {
   const jidFormMatches =
     mine.length > 0 && all.some((g) => g.memberIds.some((id) => mine.includes(id)));
 
+  // Participant lists come from each chat's cached groupMetadata, and on a cold
+  // start — a fresh container right after a redeploy — that cache is empty until
+  // it syncs. Every group then looks like a 0-member group. Treating those as
+  // "left" empties the picker, which also empties the admin-source dropdown, and
+  // saving the selection at that moment silently clears adminGroupId and stops
+  // auto-forwarding. So the emptiness rule only applies once at least one group
+  // reports participants, which is the proof that metadata has actually loaded.
+  const metadataHasLoaded = all.some((g) => g.memberIds.length > 0);
+
+  // The configured admin source group and anything already selected are never
+  // hidden. Dropping them out of the list is what breaks forwarding, and a
+  // wrongly-hidden group is far more costly here than a stale row.
+  const pinned = new Set(
+    [state.adminGroupId, ...state.selectedGroups.map((g) => g.id)].filter(Boolean)
+  );
+
   const groups = all
     .filter((g) => {
+      if (pinned.has(g.id)) return true;
+      if (!metadataHasLoaded) return true;
       // A group you are still in always contains at least you, so an empty
       // participant list means you are not in it. This alone covers the
       // "0 members" rows, and holds regardless of JID format.
@@ -823,6 +1014,14 @@ async function getAllGroups({ refresh = false } = {}) {
       return g.memberIds.some((id) => mine.includes(id));
     })
     .sort((a, b) => b.memberCount - a.memberCount); // most members first
+
+  if (!metadataHasLoaded && all.length > 0) {
+    console.warn(
+      `Group metadata has not loaded yet (${all.length} groups, none with participants) — ` +
+      'showing all groups and skipping the left-group filter. Click "Refresh from WhatsApp" ' +
+      'to populate member counts.'
+    );
+  }
 
   const hidden = all.length - groups.length;
   if (hidden > 0) {

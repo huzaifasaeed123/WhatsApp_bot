@@ -60,7 +60,9 @@ const collections = {
   Msg: {
     get(key) {
       if (typeof key !== 'string') throw new TypeError('Cannot convert object to primitive value');
-      return null;
+      // A real store returns the message for a well-formed key; returning null
+      // here would mask whether the forward path itself works.
+      return { id: key, body: 'hi' };
     },
     async getMessagesById(ids) {
       ids.map(String); // this is the line that throws in the real bundle
@@ -72,15 +74,32 @@ const collections = {
 
 const serialize = (o) => JSON.parse(JSON.stringify(o));
 
+// WAWebChatForwardMessage is deliberately absent: on the live build it resolves
+// to undefined, which is what produced "Cannot read properties of undefined
+// (reading 'forwardMessages')" on every group. The real module now lives under
+// a renamed id that only a registry scan can find.
+const forwardCalls = [];
+const moduleRegistry = {
+  WAWebSomeRenamedForwardThing: {
+    forwardMessages: async (args) => { forwardCalls.push(args); return true; },
+  },
+  WAWebUnrelated: { somethingElse: () => {} },
+};
+
 const window = {
   Debug: { VERSION: '2.3000.1045737606' },
   require(name) {
+    if (name === '__debug') return { modulesMap: moduleRegistry };
+    if (Object.prototype.hasOwnProperty.call(moduleRegistry, name)) return moduleRegistry[name];
     if (name === 'WAWebMsgKey') return MinifiedMsgKey;
     if (name === 'WAWebWidFactory') return { createWid: (s) => new RealWid(...s.split('@').reverse().reverse()) };
     if (name === 'WAWebCollections') return collections;
     throw new Error('module not found: ' + name);
   },
   WWebJS: {
+    // Present so the shim has something to replace; the body is irrelevant
+    // because the shim overwrites it entirely.
+    async forwardMessage() { throw new Error('original should have been replaced'); },
     // SYNCHRONOUS in the real library (Injected/Utils.js:803). Wrapping this in
     // an async function is what broke production: the caller below assigns the
     // return value straight into the chat model, so a Promise landed where a
@@ -89,6 +108,7 @@ const window = {
       return { id: serialize(message.id), from: serialize(message.from), body: 'hi' };
     },
     // ASYNC in the real library (Injected/Utils.js:938).
+    async getChat() { return { id: 'chat' }; },
     async getChatModel(chat) {
       const model = { id: serialize(chat.id), formattedTitle: 'T', isGroup: true, lastMessage: null };
       // mirrors Injected/Utils.js:996-999
@@ -198,6 +218,24 @@ check('getMessageModel id materialized', syncModel.id._serialized, 'false_120363
   }));
   check('legacy id', legacy.id._serialized, 'true_1@c.us_X');
   check('legacy from', legacy.from, '1@c.us');
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // 3. Forward module resolution.
+  // ─────────────────────────────────────────────────────────────────────────
+  console.log('\n─── forward module ───');
+
+  // REGRESSION: the hardcoded name is gone, so the resolver must locate the
+  // module by scanning rather than giving up.
+  check('forward module found despite the rename',
+    result.forwardModule, 'WAWebSomeRenamedForwardThing (found by scan)');
+  check('library name no longer resolves',
+    typeof moduleRegistry.WAWebChatForwardMessage, 'undefined');
+
+  // The replacement forwardMessage must actually route through it.
+  await window.WWebJS.forwardMessage('120363427554847352@g.us', 'false_1@g.us_ABC');
+  check('forwardMessages called once', forwardCalls.length, 1);
+  check('forwarded with multicast', forwardCalls[0].multicast, true);
+  check('caption included', forwardCalls[0].includeCaption, true);
 
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);

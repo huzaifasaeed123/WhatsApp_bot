@@ -56,6 +56,18 @@ const brokenKeyGroup = new MinifiedMsgKey(
   new RealWid('120363427554847352', 'g.us'), 'FEDCBA654321', false, new RealWid('923339876543', 'c.us')
 );
 
+// Exactly what `new MsgKey({from, to, id, participant, selfDir: 'out'})`
+// produces at Injected/Utils.js:445 — the shape that made every send fail.
+class OutgoingMsgKey {
+  constructor(to, id, participant) {
+    this.$a = new RealWid('923001112222', 'c.us'); // from (us)
+    this.$b = to;
+    this.$c = id;
+    if (participant) this.$d = participant;
+    this.$e = 'out';                                // selfDir — NOT a boolean
+  }
+}
+
 const collections = {
   Msg: {
     get(key) {
@@ -101,6 +113,10 @@ const window = {
     if (name === 'WAWebMsgKey') return MinifiedMsgKey;
     if (name === 'WAWebWidFactory') return { createWid: (s) => new RealWid(...s.split('@').reverse().reverse()) };
     if (name === 'WAWebCollections') return collections;
+    if (name === 'WAWebUserPrefsMeUser') return {
+      getMaybeMePnUser: () => new RealWid('923001112222', 'c.us'),
+      getMaybeMeLidUser: () => null,
+    };
     if (name === 'WAWebChatGetters') return {
       getIsNewsletter: (chat) => {
         if (!chat || chat.id == null) {
@@ -281,6 +297,43 @@ check('getMessageModel id materialized', syncModel.id._serialized, 'false_120363
   // An id that resolves to nothing at all yields null rather than a broken object.
   const missing = await window.WWebJS.getChat('000@g.us', { getAsModel: false });
   check('unresolvable chat returns null', missing, null);
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // 5. Freshly constructed outgoing keys.
+  // ─────────────────────────────────────────────────────────────────────────
+  console.log('\n─── outgoing MsgKey ───');
+
+  // REGRESSION: direction arrives as the string 'out', not a boolean. Demanding
+  // a boolean returned undefined, and that undefined became the key WhatsApp
+  // memoizes the outgoing message by — "Data passed to getter must include an
+  // id property (it's how we memoize) but got undefined" on every send.
+  const outgoingGroup = new OutgoingMsgKey(
+    new RealWid('120363162234460479', 'g.us'),
+    'OUT123456',
+    new RealWid('923001112222', 'c.us')
+  );
+  Object.setPrototypeOf(outgoingGroup, MinifiedMsgKey.prototype);
+  check('outgoing group key serializes', outgoingGroup._serialized,
+    'true_120363162234460479@g.us_OUT123456_923001112222@c.us');
+  check('never undefined for an outgoing key',
+    typeof outgoingGroup._serialized, 'string');
+
+  // 1:1: the remote is the other party, not us.
+  const outgoingDm = new OutgoingMsgKey(new RealWid('923339999999', 'c.us'), 'DM99');
+  Object.setPrototypeOf(outgoingDm, MinifiedMsgKey.prototype);
+  check('outgoing 1:1 key uses the peer as remote', outgoingDm._serialized,
+    'true_923339999999@c.us_DM99');
+
+  // 'in' must map to false, not be mistaken for the message id.
+  const incoming = new OutgoingMsgKey(new RealWid('120363162234460479', 'g.us'), 'IN777');
+  incoming.$e = 'in';
+  Object.setPrototypeOf(incoming, MinifiedMsgKey.prototype);
+  check('incoming direction maps to false',
+    incoming._serialized.startsWith('false_'), true);
+
+  // The direction marker must never be picked up as the message id.
+  check('selfDir not mistaken for the id',
+    outgoingGroup._serialized.includes('_out_'), false);
 
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);

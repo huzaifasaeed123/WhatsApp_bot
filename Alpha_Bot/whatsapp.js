@@ -300,36 +300,106 @@ async function installSerializedShim() {
       };
 
       // Serialized form of a MsgKey.
+      // A MsgKey the page has just constructed carries no boolean and no
+      // serialized string — WWebJS.sendMessage builds it as
+      // { from, to, id, participant, selfDir: 'out' } — so direction arrives as
+      // the STRING 'out'/'in'. An earlier version of this resolver demanded a
+      // boolean, returned undefined for every outgoing message, and that
+      // undefined became the key WhatsApp memoizes the outgoing message by:
+      // "Data passed to getter must include an id property (it's how we
+      // memoize) but got undefined", on every send.
+      const DIRECTION = { out: true, in: false };
+
+      // Ask WhatsApp to serialize the key rather than fabricating the string.
+      // Property names are minified, but a zero-argument prototype method that
+      // returns something shaped like a message key is WhatsApp's own
+      // serializer whatever it is currently called. Mutators are skipped by
+      // name, and every call is guarded.
+      const nativeSerializer = (obj, re) => {
+        if (resolving) return undefined;
+        const proto = Object.getPrototypeOf(obj);
+        if (!proto) return undefined;
+        resolving = true;
+        try {
+          for (const name of Object.getOwnPropertyNames(proto)) {
+            if (name === 'constructor' || name === '_serialized') continue;
+            if (/^(set|update|delete|remove|add|send|clear|reset|write)/i.test(name)) continue;
+            let fn;
+            try { fn = proto[name]; } catch { continue; }
+            if (typeof fn !== 'function' || fn.length !== 0) continue;
+            let out;
+            try { out = fn.call(obj); } catch { continue; }
+            if (typeof out === 'string' && re.test(out)) return out;
+          }
+          return undefined;
+        } finally {
+          resolving = false;
+        }
+      };
+
+      // Identify this account, so the remote of a 1:1 key can be told from us.
+      const ownWid = () => {
+        try {
+          const prefs = window.require('WAWebUserPrefsMeUser');
+          return (
+            widString(prefs.getMaybeMePnUser?.()) ||
+            widString(prefs.getMaybeMeLidUser?.())
+          );
+        } catch { return undefined; }
+      };
+
       const msgKeyString = (key) => {
         if (key == null) return undefined;
         if (typeof key === 'string') return MSGKEY_RE.test(key) ? key : undefined;
         if (typeof key !== 'object') return undefined;
 
-        const direct = nativeToString(key, MSGKEY_RE) || ownStringMatching(key, MSGKEY_RE);
+        const direct =
+          nativeToString(key, MSGKEY_RE) ||
+          ownStringMatching(key, MSGKEY_RE) ||
+          nativeSerializer(key, MSGKEY_RE);
         if (direct) return direct;
 
-        // Rebuild it, identifying the parts by shape: the remote is the WID-ish
-        // property, fromMe the boolean, the id the remaining opaque string.
-        let remote, participant, fromMe;
+        // Rebuild it, identifying the parts by shape rather than by name.
+        let fromMe;
         const plainStrings = [];
+        const wids = [];
         for (const prop of Object.getOwnPropertyNames(key)) {
           let value;
           try { value = key[prop]; } catch { continue; }
           if (typeof value === 'boolean') {
             if (fromMe === undefined) fromMe = value;
           } else if (typeof value === 'string') {
-            plainStrings.push(value);
+            const direction = DIRECTION[value.toLowerCase()];
+            if (direction !== undefined) {
+              if (fromMe === undefined) fromMe = direction;
+            } else if (!WID_RE.test(value)) {
+              // Not a direction marker and not a JID, so it is the message id.
+              plainStrings.push(value);
+            }
           } else if (value && typeof value === 'object') {
             const asWid = widString(value);
-            if (!asWid) continue;
-            // The chat lives in `remote`, a group sender in `participant`.
-            // A group JID identifies the remote unambiguously.
-            if (!remote || asWid.endsWith('@g.us')) remote = asWid;
-            else participant = asWid;
+            if (asWid) wids.push(asWid);
           }
         }
-        // The message id is the string that is not itself a WID.
-        const id = plainStrings.find((s) => !WID_RE.test(s));
+
+        // The remote is the conversation. A group JID says so outright;
+        // otherwise it is whichever party is not this account.
+        const me = ownWid();
+        const group = wids.find((w) => w.endsWith('@g.us'));
+        let remote;
+        let participant;
+        if (group) {
+          remote = group;
+          // Inside a group the participant is the sender — us, on an outgoing
+          // key. Prefer our own WID, else any other non-group WID present.
+          participant =
+            (me && wids.includes(me) ? me : undefined) ||
+            wids.find((w) => w !== group);
+        } else {
+          remote = wids.find((w) => me && w !== me) || wids[0];
+        }
+
+        const id = plainStrings[0];
         if (remote == null || id == null || fromMe === undefined) return undefined;
         return `${fromMe}_${remote}_${id}` + (participant ? `_${participant}` : '');
       };
@@ -944,6 +1014,7 @@ client.on('message', async (message) => {
           if (!diagnosed) {
             diagnosed = true;
             await diagnoseSend(group.id);
+            await traceSendFailure(group.id, message.body);
           }
         }
       }
@@ -1020,6 +1091,86 @@ async function diagnoseSend(groupId) {
     console.error('───────────────────────');
   } catch (err) {
     console.error('Send diagnostic itself failed:', err.message);
+  }
+}
+
+// Reproduce a failing text send inside the page so the real stack survives.
+// Puppeteer serializes a page-side Error to its message alone, which is why
+// "Data passed to getter..." arrived with no indication of which call produced
+// it. Returns strings, never Error objects, so nothing is lost in transit.
+async function traceSendFailure(groupId, text) {
+  try {
+    const report = await client.pupPage.evaluate(async (chatId, body) => {
+      const out = {};
+      const stringify = (e) => ({
+        name: String(e?.name),
+        message: String(e?.message),
+        stack: String(e?.stack || '').split('\n').slice(0, 12).join('\n'),
+      });
+
+      let chat;
+      try {
+        chat = await window.WWebJS.getChat(chatId, { getAsModel: false });
+        out.chat = chat ? 'resolved' : 'null';
+      } catch (e) {
+        out.chat = 'THREW ' + stringify(e).message;
+        return out;
+      }
+      if (!chat) return out;
+
+      // Step through the same sequence WWebJS.sendMessage performs, so the
+      // failing step is identified by name rather than inferred.
+      try {
+        const { getIsNewsletter, getIsBroadcast } = window.require('WAWebChatGetters');
+        out.getIsNewsletter = String(getIsNewsletter(chat));
+        out.getIsBroadcast = String(getIsBroadcast(chat));
+      } catch (e) { out.getters = stringify(e); return out; }
+
+      try {
+        const { getMaybeMeLidUser, getMaybeMePnUser } =
+          window.require('WAWebUserPrefsMeUser');
+        const lid = getMaybeMeLidUser();
+        const pn = getMaybeMePnUser();
+        out.meLid = lid ? 'present' : String(lid);
+        out.mePn = pn ? 'present' : String(pn);
+        out.chatIsGroup =
+          typeof chat.id?.isGroup === 'function' ? String(chat.id.isGroup()) : 'no isGroup()';
+      } catch (e) { out.meUser = stringify(e); return out; }
+
+      try {
+        out.ephemeral = window
+          .require('WAWebGetEphemeralFieldsMsgActionsUtils')
+          .getEphemeralFields(chat) ? 'ok' : 'returned falsy';
+      } catch (e) { out.ephemeral = stringify(e); return out; }
+
+      try {
+        const newId = await window.require('WAWebMsgKey').newId();
+        out.newMsgKeyId = typeof newId;
+      } catch (e) { out.newMsgKey = stringify(e); return out; }
+
+      // The real thing. This is the call that fails in production.
+      try {
+        const msg = await window.WWebJS.sendMessage(chat, body, {});
+        out.sendMessage = msg ? 'SUCCEEDED' : 'returned falsy';
+      } catch (e) { out.sendMessage = stringify(e); }
+
+      return out;
+    }, groupId, text || 'diagnostic');
+
+    console.error('─── Send trace ───');
+    for (const [key, value] of Object.entries(report)) {
+      if (value && typeof value === 'object') {
+        console.error(`  ${key}: ${value.name}: ${value.message}`);
+        if (value.stack) {
+          for (const line of value.stack.split('\n')) console.error(`      ${line}`);
+        }
+      } else {
+        console.error(`  ${key}: ${value}`);
+      }
+    }
+    console.error('──────────────────');
+  } catch (err) {
+    console.error('Send trace itself failed:', err.message);
   }
 }
 

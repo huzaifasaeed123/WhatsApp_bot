@@ -611,24 +611,30 @@ async function installSerializedShim() {
       }
 
       // ── Media sends ───────────────────────────────────────────────────────
-      // WWebJS.sendMessage builds the outgoing message as
+      // WWebJS.sendMessage spreads the prepared media data over the outgoing
+      // message object, after `id: newMsgKey` has been set:
       //
       //     { ...options, id: newMsgKey, ..., ...mediaOptions,
       //       ...(mediaOptions.toJSON ? mediaOptions.toJSON() : {}), ... }
       //
-      // The media data is spread AFTER `id: newMsgKey`, so any `id` it carries
-      // replaces the message key. The message is then memoized by something
-      // that is not a MsgKey and has no _serialized, which is the "Data passed
-      // to getter must include an id property" failure. It can only happen when
-      // media is attached — matching a run where text arrives and media does
-      // not.
+      // MediaData is a model carrying a private `__x_id` field. Spread copies
+      // it onto the message, where it collides with Msg's own internal id and
+      // breaks getValidatedSender() during Msg initialisation — surfacing as
+      // "Data passed to getter must include an id property (it's how we
+      // memoize) but got undefined" on every media send, while text sends are
+      // unaffected.
       //
-      // The model itself is left untouched (WhatsApp uses it for the upload);
-      // only the two things that get spread are shielded. toJSON is wrapped to
-      // omit id, and the model gets a non-enumerable id so the spread skips it
-      // while direct reads still work.
-      let mediaIdShielded = false;
-      let mediaCarriedId = null;
+      // This is upstream PR #201923, merged to main on 2026-09-28 and not yet
+      // in any npm release (latest is 1.34.7, April 2026). Upstream deletes
+      // message.__x_id inside sendMessage; we cannot edit that function, so the
+      // field is hidden from the spread at its source instead. The model keeps
+      // the value for WhatsApp's own use — it is only made non-enumerable, and
+      // removed from toJSON's output.
+      //
+      // An earlier version of this guarded `id` rather than `__x_id` and so
+      // did nothing at all.
+      const SPREAD_UNSAFE_MEDIA_FIELDS = ['__x_id'];
+      let mediaFieldsShielded = [];
       const origProcessMediaData = window.WWebJS?.processMediaData;
       if (
         typeof origProcessMediaData === 'function' &&
@@ -637,31 +643,36 @@ async function installSerializedShim() {
         const shield = (mediaData) => {
           if (!mediaData || typeof mediaData !== 'object') return mediaData;
 
-          try {
-            const descriptor = Object.getOwnPropertyDescriptor(mediaData, 'id');
-            if (descriptor && descriptor.enumerable) {
-              mediaCarriedId = typeof mediaData.id;
-              // Keep the value, hide it from object spread.
-              Object.defineProperty(mediaData, 'id', {
-                ...descriptor,
-                enumerable: false,
-              });
-              mediaIdShielded = true;
-            }
-          } catch { /* leave the model alone */ }
+          for (const field of SPREAD_UNSAFE_MEDIA_FIELDS) {
+            try {
+              const descriptor = Object.getOwnPropertyDescriptor(mediaData, field);
+              if (descriptor && descriptor.enumerable) {
+                Object.defineProperty(mediaData, field, {
+                  ...descriptor,
+                  enumerable: false,
+                });
+                if (!mediaFieldsShielded.includes(field)) mediaFieldsShielded.push(field);
+              }
+            } catch { /* leave the model alone */ }
+          }
 
           try {
             const origToJSON = mediaData.toJSON;
             if (typeof origToJSON === 'function' && !origToJSON.__alphaBotShielded) {
               const wrapped = function (...args) {
                 const json = origToJSON.apply(this, args);
-                if (json && typeof json === 'object' && 'id' in json) {
-                  mediaCarriedId = mediaCarriedId || 'in toJSON';
-                  mediaIdShielded = true;
-                  const { id, ...rest } = json;
-                  return rest;
+                if (!json || typeof json !== 'object') return json;
+                let stripped = json;
+                for (const field of SPREAD_UNSAFE_MEDIA_FIELDS) {
+                  if (field in stripped) {
+                    const { [field]: _removed, ...rest } = stripped;
+                    stripped = rest;
+                    if (!mediaFieldsShielded.includes(field + ' (toJSON)')) {
+                      mediaFieldsShielded.push(field + ' (toJSON)');
+                    }
+                  }
                 }
-                return json;
+                return stripped;
               };
               wrapped.__alphaBotShielded = true;
               mediaData.toJSON = wrapped;
@@ -812,6 +823,7 @@ async function installSerializedShim() {
         mediaShieldInstalled:
           typeof window.WWebJS?.processMediaData === 'function' &&
           !!window.WWebJS.processMediaData.__alphaBotShielded,
+        mediaShieldFields: mediaFieldsShielded,
         version: window.Debug?.VERSION || 'unknown',
       };
     });
@@ -825,7 +837,9 @@ async function installSerializedShim() {
     if (result.wrappedModels.length) console.log(`Materializing ids for: ${result.wrappedModels.join(', ')}.`);
     console.log('MsgKey decode check:', result.sample);
     if (result.chatLookupHardened) console.log('Hardened chat lookup installed.');
-    if (result.mediaShieldInstalled) console.log('Media-send key shield installed.');
+    if (result.mediaShieldInstalled) {
+      console.log('Media-send key shield installed (guarding __x_id).');
+    }
     if (result.forwardModule) {
       console.log(`Forwarding available via ${result.forwardModule}.`);
       forwardSupported = true;

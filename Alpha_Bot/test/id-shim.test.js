@@ -144,12 +144,19 @@ const window = {
     // ASYNC in the real library (Injected/Utils.js:938).
     async getChat() { return collections.Chat.get(); },
     async processMediaData() {
+      // MediaData's private model field. Spreading it onto the outgoing message
+      // collides with Msg's internal id and breaks getValidatedSender().
+      // Upstream fixes this by deleting message.__x_id (PR #201923).
       const mediaData = {
-        id: 'media-object-id-not-a-msgkey',
+        __x_id: 'media-model-internal-id',
         mimetype: 'image/png',
         filehash: 'abc123',
         toJSON() {
-          return { id: 'media-object-id-not-a-msgkey', mimetype: 'image/png', filehash: 'abc123' };
+          return {
+            __x_id: 'media-model-internal-id',
+            mimetype: 'image/png',
+            filehash: 'abc123',
+          };
         },
       };
       return mediaData;
@@ -356,14 +363,16 @@ check('getMessageModel id materialized', syncModel.id._serialized, 'false_120363
     { mimetype: 'image/png', data: 'x' }, {}
   );
 
+  check('shielded field reported', result.mediaShieldFields.includes('__x_id'), true);
+
   // The value is preserved for WhatsApp's own use...
-  check('media id still readable directly', media.id, 'media-object-id-not-a-msgkey');
-  // ...but must not travel through object spread, which is how it reached
-  // `message.id` and replaced the MsgKey.
-  check('media id excluded from spread',
-    Object.prototype.hasOwnProperty.call({ ...media }, 'id'), false);
-  check('media id excluded from toJSON',
-    Object.prototype.hasOwnProperty.call(media.toJSON(), 'id'), false);
+  check('__x_id still readable directly', media.__x_id, 'media-model-internal-id');
+  // ...but must not travel through object spread, which is how it reached the
+  // outgoing message and broke Msg initialisation.
+  check('__x_id excluded from spread',
+    Object.prototype.hasOwnProperty.call({ ...media }, '__x_id'), false);
+  check('__x_id excluded from toJSON',
+    Object.prototype.hasOwnProperty.call(media.toJSON(), '__x_id'), false);
   check('other media fields survive spread', { ...media }.filehash, 'abc123');
   check('other media fields survive toJSON', media.toJSON().mimetype, 'image/png');
 
@@ -382,6 +391,10 @@ check('getMessageModel id materialized', syncModel.id._serialized, 'false_120363
   check('message.id survives the media spread', built.id, newMsgKey);
   check('message.id still serializes', built.id._serialized,
     'true_120363162234460479@g.us_KEEPME_923001112222@c.us');
+  // The field that actually breaks Msg initialisation must not be on the
+  // message at all — this is precisely what upstream deletes.
+  check('__x_id never reaches the message',
+    Object.prototype.hasOwnProperty.call(built, '__x_id'), false);
 
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
